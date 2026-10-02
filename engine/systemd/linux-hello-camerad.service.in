@@ -1,0 +1,65 @@
+[Unit]
+Description=Linux Hello Camera daemon
+Documentation=https://github.com/TickLabVN/biopass
+Requires=linux-hello-camerad.socket
+After=linux-hello-camerad.socket
+
+[Service]
+# Started by the socket on the first request; the daemon exits by itself after 60 s without one
+# (and stays while there are recent failed attempts, so the rate limiter keeps its counters).
+Type=simple
+# systemd-creds makes /var/lib/systemd/credential.secret on first use, which the sandbox below
+# would stop it from doing. "+" runs this one step outside the sandbox, "-" ignores a failure (no
+# TPM or nothing to encrypt is fine; encrypting then fails with a clear error instead).
+ExecStartPre=-+/usr/bin/systemd-creds setup
+ExecStart=@LHC_LIBEXEC_FULL_DIR@/linux-hello-camerad
+
+# Runs as root: it opens the camera for users who cannot (the KDE lock screen asks as the user) and
+# is the only process that reads the face templates. The lines below take away everything else.
+
+# The daemon never needs to gain privileges, and neither does systemd-creds.
+NoNewPrivileges=yes
+
+# /usr, /boot and /etc become read-only, and so does everything else except what is listed below.
+# systemd-creds only reads /var/lib/systemd/credential.secret (read-only is enough) and the
+# TPM device; the config is written by `set-encryption` and the templates by enroll.
+ProtectSystem=strict
+ReadWritePaths=-/etc/linux-hello-camera
+# Creates /var/lib/linux-hello-camera as root:root 0700 and keeps it writable, so the templates
+# (and the 0.8 face crops that `migrate` removes) can only be reached by root.
+StateDirectory=linux-hello-camera
+StateDirectoryMode=0700
+
+# Everything it creates (templates, temp files) is private to root unless a mode is set explicitly.
+UMask=0077
+
+# Nothing the daemon does involves home directories or other users' temp files.
+ProtectHome=yes
+PrivateTmp=yes
+
+# Only the local socket: no network, no netlink. Logging goes through /dev/log (AF_UNIX).
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
+
+# /dev keeps the API devices (null, zero, urandom) but nothing else is accessible except what is
+# allowed here: the V4L2 cameras and the TPM resource manager. PrivateDevices is deliberately not
+# used: it would hide /dev/video* and /dev/tpmrm0 from the daemon and from systemd-creds.
+DevicePolicy=closed
+DeviceAllow=char-video4linux rw
+DeviceAllow=/dev/tpmrm0 rw
+
+# No reason to touch kernel settings, modules or the kernel log. (/proc/acpi is hidden by
+# ProtectKernelTunables, which is why the lid check lives in the helper, not here.)
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+
+# Plain C++ with no need for personality() tricks.
+LockPersonality=yes
+
+# Not set, because they were not verified against ONNX Runtime / systemd-creds / tpm2-tss here:
+#   MemoryDenyWriteExecute  (ONNX Runtime may map executable memory)
+#   SystemCallFilter        (a too-tight list breaks ONNX Runtime threads or the TPM libraries)
+#   ProtectControlGroups, ProtectClock, RestrictNamespaces, CapabilityBoundingSet (not worth the risk of
+#   an untested sandbox failing closed on the one machine that matters; the device policy already limits
+#   what root can open)

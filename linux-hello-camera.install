@@ -1,0 +1,52 @@
+helper=/usr/lib/linux-hello-camera/settings-helper
+engine=/usr/lib/linux-hello-camera/linux-hello-camera-helper
+
+# The engine daemon holds the camera and the only copy of the decryption rights for face data.
+# It's socket-activated, so the socket is what gets enabled; a running daemon is restarted so
+# an upgrade takes effect.
+start_daemon() {
+	systemctl daemon-reload >/dev/null 2>&1 || true
+	systemctl enable --now linux-hello-camerad.socket >/dev/null 2>&1 || true
+	systemctl try-restart linux-hello-camerad.service >/dev/null 2>&1 || true
+}
+
+# Face pictures from version 0.8 become encrypted templates (and the pictures are deleted)
+migrate_faces() {
+	local reply users
+	reply="$("$engine" migrate 2>/dev/null)" || reply=""
+	users="$(printf '%s' "$reply" | /usr/bin/python3 -c 'import json, sys; print(", ".join(json.load(sys.stdin).get("migrated", [])))' 2>/dev/null)" || users=""
+	if [ -n "$users" ]; then
+		echo "Linux Hello Camera: converted the face pictures of $users to encrypted templates and deleted the pictures."
+	elif [ -z "$reply" ] && [ -d /var/lib/linux-hello-camera/faces ]; then
+		echo "Linux Hello Camera: could not convert the old face pictures. Add your face again in the app."
+	fi
+}
+
+post_install() {
+	start_daemon
+	"$helper" pam-refresh >/dev/null 2>&1 || true
+	if [ -d /var/lib/linux-hello-camera/faces ]; then
+		migrate_faces
+	fi
+}
+
+# Bring face unlock that's already on up to date with this version
+post_upgrade() {
+	start_daemon
+	"$helper" pam-refresh >/dev/null 2>&1 || true
+	migrate_faces
+}
+
+# Turn everything the app set up off before its files disappear, so PAM never points at a
+# missing module, gate or broker.
+pre_remove() {
+	"$helper" pam-disable sudo polkit-1 gdm-password sddm plasmalogin kde-fingerprint kde >/dev/null 2>&1 || true
+	systemctl disable --now linux-hello-camerad.socket linux-hello-camerad.service >/dev/null 2>&1 || true
+	echo "Linux Hello Camera: face unlock was turned off in PAM."
+}
+
+post_remove() {
+	systemctl daemon-reload >/dev/null 2>&1 || true
+	echo "Linux Hello Camera: your face templates are still in /var/lib/linux-hello-camera/templates."
+	echo "    Remove them with: sudo rm -r /var/lib/linux-hello-camera"
+}

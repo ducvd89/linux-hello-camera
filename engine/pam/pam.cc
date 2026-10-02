@@ -1,0 +1,123 @@
+#include <security/pam_appl.h>
+#include <security/pam_modules.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+// <libdir>/linux-hello-camera/linux-hello-camera-helper, i.e. /usr/lib/... for a /usr prefix.
+static const char* const kHelperPath = LHC_HELPER_PATH;
+
+// Called by PAM when a user needs to be authenticated
+PAM_EXTERN int pam_sm_authenticate(pam_handle_t* pamh, int flags, int argc, const char** argv) {
+  (void)flags;
+  (void)argc;
+  (void)argv;
+
+  int retval;
+
+  const char* service = nullptr;
+  retval = pam_get_item(pamh, PAM_SERVICE, (const void**)&service);
+  if (retval != PAM_SUCCESS) {
+    service = nullptr;
+  }
+
+  // A remote login (PAM_RHOST set, e.g. by sshd) must never be unlocked by the local camera.
+  const char* rhost = nullptr;
+  const bool remote = pam_get_item(pamh, PAM_RHOST, (const void**)&rhost) == PAM_SUCCESS &&
+                      rhost != nullptr && rhost[0] != '\0';
+
+  const char* pUsername;
+  retval = pam_get_user(pamh, &pUsername, NULL);
+  if (retval != PAM_SUCCESS) {
+    return retval;
+  }
+
+  pid_t pid = fork();
+  if (pid < 0) {
+    return PAM_AUTH_ERR;
+  } else if (pid == 0) {
+    // Run "linux-hello-camera-helper auth --username <username> [--service <name>] [--remote]"
+    const char* args[10];
+    int n = 0;
+    args[n++] = "linux-hello-camera-helper";
+    args[n++] = "auth";
+    args[n++] = "--username";
+    args[n++] = pUsername;
+    if (service != nullptr && service[0] != '\0') {
+      args[n++] = "--service";
+      args[n++] = service;
+    }
+    if (remote) {
+      args[n++] = "--remote";
+    }
+    args[n] = nullptr;
+    execv(kHelperPath, const_cast<char* const*>(args));
+
+    // If execl returns, it failed. Don't perror() here: this process's
+    // stdio is inherited from the PAM caller (e.g. polkit-agent-helper-1),
+    // which some callers (GNOME Shell's polkit agent) parse as a strict
+    // line protocol -- any unexpected line on it derails the caller's
+    // authentication state machine instead of a clean failure.
+    exit(1);
+  } else {
+    int status;
+    waitpid(pid, &status, 0);
+
+    if (WIFEXITED(status)) {
+      int exit_code = WEXITSTATUS(status);
+      if (exit_code == 0) {
+        return PAM_SUCCESS;
+      } else if (exit_code == 2) {
+        return PAM_IGNORE;
+      } else {
+        return PAM_AUTH_ERR;
+      }
+    } else {
+      // Child did not exit normally (e.g., killed by signal)
+      return PAM_AUTH_ERR;
+    }
+  }
+}
+
+// The functions below are required by PAM, but not needed in this module
+PAM_EXTERN int pam_sm_open_session(pam_handle_t* pamh, int flags, int argc, const char** argv) {
+  (void)pamh;
+  (void)flags;
+  (void)argc;
+  (void)argv;
+  return PAM_IGNORE;
+}
+
+PAM_EXTERN int pam_sm_acct_mgmt(pam_handle_t* pamh, int flags, int argc, const char** argv) {
+  (void)pamh;
+  (void)flags;
+  (void)argc;
+  (void)argv;
+  return PAM_IGNORE;
+}
+
+PAM_EXTERN int pam_sm_close_session(pam_handle_t* pamh, int flags, int argc, const char** argv) {
+  (void)pamh;
+  (void)flags;
+  (void)argc;
+  (void)argv;
+  return PAM_IGNORE;
+}
+
+PAM_EXTERN int pam_sm_chauthtok(pam_handle_t* pamh, int flags, int argc, const char** argv) {
+  (void)pamh;
+  (void)flags;
+  (void)argc;
+  (void)argv;
+  return PAM_IGNORE;
+}
+
+PAM_EXTERN int pam_sm_setcred(pam_handle_t* pamh, int flags, int argc, const char** argv) {
+  (void)pamh;
+  (void)flags;
+  (void)argc;
+  (void)argv;
+  return PAM_IGNORE;
+}

@@ -1,0 +1,14 @@
+[Unit]
+Description=Linux Hello Camera daemon socket
+
+[Socket]
+# Anyone may connect: every request is checked against the peer's uid (SO_PEERCRED) by the daemon.
+# Root-only commands (enroll, test, remove, clear, migrate, set-encryption) are refused for others;
+# auth and list are open to the user the request names, status to everyone.
+ListenStream=@LHC_SOCKET_PATH@
+SocketMode=0666
+DirectoryMode=0755
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

@@ -1,0 +1,81 @@
+#!/usr/bin/python3 -I
+"""Ask before a recognised face approves sudo or an admin prompt.
+
+The engine runs this as root after a face match, for the services in confirm.services:
+
+    confirm-hook --user USER --service SERVICE --pam-pid PID
+
+Like Windows Hello, a matching face alone doesn't approve sudo or a polkit password prompt: you
+click Continue in a dialog in your desktop session. Exit status 0 approves, anything else
+means no. The lock screen and login screen don't run this.
+
+Usually confirm-broker has already opened the dialog before the face check started ("Making
+sure it's you"); this tells it about the match, which lights up Continue, and waits for the
+answer. PID is the process doing the authentication (sudo or polkit-agent-helper-1), which is
+what the broker's socket is named after. If there's no broker, this opens the dialog itself.
+
+It must not print anything: for admin prompts, stdout is polkit's protocol channel. Anything
+unexpected (no desktop session, no dialog, a crash, the timeout) counts as "no", so the
+authentication falls back to the password.
+"""
+
+import pwd
+import socket
+import subprocess
+import sys
+
+sys.path.insert(0, "/usr/lib/linux-hello-camera")
+
+# PAM service -> kind of request shown in the dialog
+KINDS = {"sudo": "sudo", "polkit-1": "polkit"}
+
+
+def parse(argv):
+    """{"user": ..., "service": ..., "pam-pid": ...} from the command line, or None."""
+    names = ("--user", "--service", "--pam-pid")
+    if len(argv) != 6 or argv[0::2] != list(names):
+        return None
+    return {name[2:]: value for name, value in zip(names, argv[1::2])}
+
+
+def ask(args):
+    import linux_hello_camera_common as common
+
+    kind = KINDS.get(args["service"])
+    if kind is None or not args["pam-pid"].isdigit() or int(args["pam-pid"]) < 2:
+        return False
+    pam_pid = int(args["pam-pid"])
+    timeout = common.confirm_timeout()
+
+    path = common.trusted_socket(pam_pid)
+    if path:
+        # The broker's dialog is already on screen: light up Continue and wait
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
+            conn.settimeout(timeout + 10)
+            conn.connect(path)
+            conn.sendall(f"matched {timeout}\n".encode())
+            return conn.makefile("rb").readline().strip() == b"yes"
+
+    user = pwd.getpwnam(args["user"])
+    env = common.desktop_env(user)
+    if env is None:
+        return False  # no desktop to ask in
+    detail = common.sudo_command(pam_pid) if kind == "sudo" else ""
+    result = subprocess.run([common.DIALOG, "--kind", kind, "--timeout", str(timeout), "--detail", detail],
+                            env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL, timeout=timeout + 5, **common.as_user(user))
+    return result.returncode == 0
+
+
+def main(argv):
+    args = parse(argv)
+    if args is None:
+        return 1
+    try:
+        return 0 if ask(args) else 1
+    except Exception:
+        return 1  # refuse rather than approve on a problem
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

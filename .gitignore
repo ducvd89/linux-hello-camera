@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# CMake build folders
+build/
+
+# makepkg output and the face models it downloads into the repo root
+/src/
+/pkg/
+*.pkg.tar.*
+/*.onnx

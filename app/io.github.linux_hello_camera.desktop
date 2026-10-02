@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Linux Hello Camera
+GenericName=Face Authentication
+Comment=Set up face unlock with an IR camera for login, lock screen and sudo
+Exec=linux-hello-camera
+Icon=camera-web
+Terminal=false
+Categories=GTK;Settings;Security;
+Keywords=face;hello;unlock;login;camera;ir;biometric;
+StartupNotify=true

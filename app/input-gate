@@ -1,0 +1,121 @@
+#!/usr/bin/python3 -I
+"""Wait for a key press or click before the face scan starts on the Plasma lock screen.
+
+Plasma starts its background check (the kde-fingerprint PAM service) as soon as the mouse
+moves, so a face scan would unlock the screen right after locking it while you're still
+sitting there. This runs from pam_exec just before pam_linux_hello_camera.so in
+/etc/pam.d/kde-fingerprint, as the locked user, and only lets the scan go ahead after a key
+press, mouse button or touchpad tap. Input in the first seconds after locking (the lock shortcut itself) is ignored.
+
+    input-gate            wait; exit 0 to scan, 1 to give up
+    input-gate --release  called from /etc/pam.d/kde after a correct password, so a
+                          waiting gate stops and the lock screen can close
+
+Reading /dev/input needs the "input" group. Without it the gate lets the scan go ahead
+straight away, which is how the lock screen behaved before.
+"""
+
+import glob
+import os
+import select
+import struct
+import subprocess
+import sys
+import time
+
+EVENT = struct.Struct("llHHi")  # struct input_event: timeval, type, code, value
+EV_KEY = 0x01
+BTN_TOUCH = 0x14A
+FINGER_CODES = range(0x140, 0x150)  # BTN_TOOL_* and BTN_TOUCH: fingers resting on a touchpad
+SETTLE = 2.0  # seconds after locking during which input is ignored
+TAP = 0.25  # a touchpad touch shorter than this counts as a tap
+
+
+def release_path():
+    return f"/run/user/{os.getuid()}/linux-hello-camera-gate-release"
+
+
+def lock_age():
+    """Seconds since the screen locked, from org.freedesktop.ScreenSaver, or None."""
+    env = {"PATH": "/usr/bin:/bin", "DBUS_SESSION_BUS_ADDRESS": f"unix:path=/run/user/{os.getuid()}/bus"}
+    try:
+        out = subprocess.run(
+            ["busctl", "--user", "call", "org.freedesktop.ScreenSaver", "/ScreenSaver",
+             "org.freedesktop.ScreenSaver", "GetActiveTime"],
+            env=env, capture_output=True, text=True, timeout=2).stdout
+        return float(out.split()[1])
+    except (OSError, ValueError, IndexError, subprocess.TimeoutExpired):
+        return None
+
+
+def open_devices():
+    fds = []
+    for path in sorted(glob.glob("/dev/input/event*")):
+        try:
+            fds.append(os.open(path, os.O_RDONLY | os.O_NONBLOCK))
+        except OSError:
+            pass
+    return fds
+
+
+def is_trigger(etype, code, value, stamp, state):
+    """True when an input event counts as the user asking to unlock."""
+    if etype != EV_KEY or stamp < state["settle_until"]:
+        return False
+    if code == BTN_TOUCH:
+        if value == 1:
+            state["touch_down"] = stamp
+        elif value == 0 and state["touch_down"] is not None:
+            tapped = stamp - state["touch_down"] <= TAP
+            state["touch_down"] = None
+            return tapped
+        return False
+    if code in FINGER_CODES:
+        return False
+    # Presses count, and so do releases: the key that woke the lock screen was usually
+    # pressed a moment before this gate started, so we only get to see it being let go.
+    return value in (0, 1)
+
+
+def wait_for_input(fds, age):
+    start = time.time()
+    settle = SETTLE - age if age is not None else 0.0
+    state = {"settle_until": start + max(0.0, settle), "touch_down": None}
+    parent = os.getppid()
+    while True:
+        if os.getppid() != parent:
+            return 1  # the lock screen went away
+        try:
+            if os.stat(release_path()).st_mtime >= start:
+                return 1  # unlocked with the password
+        except OSError:
+            pass
+        ready, _, _ = select.select(fds, [], [], 0.25)
+        for fd in ready:
+            try:
+                data = os.read(fd, EVENT.size * 64)
+            except OSError:
+                fds.remove(fd)  # device unplugged
+                continue
+            for offset in range(0, len(data) - EVENT.size + 1, EVENT.size):
+                sec, usec, etype, code, value = EVENT.unpack_from(data, offset)
+                if is_trigger(etype, code, value, sec + usec / 1e6, state):
+                    return 0
+
+
+def main(argv):
+    if argv == ["--release"]:
+        try:
+            with open(release_path(), "w"):
+                pass
+        except OSError:
+            pass
+        return 0
+    fds = open_devices()
+    if not fds:
+        return 0
+    return wait_for_input(fds, lock_age())
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

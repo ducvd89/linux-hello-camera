@@ -1,0 +1,48 @@
+#include "face/common/onnx_session.h"
+
+#include <algorithm>
+#include <thread>
+
+namespace lhc {
+
+namespace {
+
+// Per-frame latency decides how many strobe frames the camera driver drops while we compute, so
+// use a few cores; more than this stops paying off for these small models.
+constexpr unsigned kMaxIntraOpThreads = 4;
+
+}  // namespace
+
+OnnxSession::OnnxSession(const std::string& model_path, const char* log_name)
+    : env_(ORT_LOGGING_LEVEL_WARNING, log_name) {
+  Ort::SessionOptions opts;
+  opts.SetIntraOpNumThreads(
+      std::clamp(std::thread::hardware_concurrency(), 1u, kMaxIntraOpThreads));
+  opts.AddConfigEntry("session.intra_op.allow_spinning", "0");
+  opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+
+  session_ = std::make_unique<Ort::Session>(env_, model_path.c_str(), opts);
+
+  for (size_t i = 0; i < session_->GetInputCount(); i++) {
+    auto name = session_->GetInputNameAllocated(i, allocator_);
+    input_names_str_.push_back(name.get());
+  }
+  for (size_t i = 0; i < session_->GetOutputCount(); i++) {
+    auto name = session_->GetOutputNameAllocated(i, allocator_);
+    output_names_str_.push_back(name.get());
+  }
+  for (auto& s : input_names_str_) input_names_cstr_.push_back(s.c_str());
+  for (auto& s : output_names_str_) output_names_cstr_.push_back(s.c_str());
+}
+
+std::vector<Ort::Value> OnnxSession::run(std::vector<float>& input,
+                                         const std::vector<int64_t>& shape) {
+  auto memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+  Ort::Value input_tensor = Ort::Value::CreateTensor<float>(memory_info, input.data(), input.size(),
+                                                            shape.data(), shape.size());
+
+  return session_->Run(Ort::RunOptions{nullptr}, input_names_cstr_.data(), &input_tensor, 1,
+                       output_names_cstr_.data(), output_names_cstr_.size());
+}
+
+}  // namespace lhc

@@ -1,0 +1,188 @@
+#!/usr/bin/python3 -I
+"""Show the confirmation dialog before the face check starts (sudo, admin prompts).
+
+Runs from pam_exec in /etc/pam.d/sudo and /etc/pam.d/polkit-1, around pam_linux_hello_camera.so:
+
+    auth  optional    pam_exec.so seteuid quiet quiet_log .../confirm-broker start
+    auth  sufficient  pam_linux_hello_camera.so
+    auth  optional    pam_exec.so seteuid quiet quiet_log .../confirm-broker failed
+
+"start" opens the dialog in its waiting state ("Making sure it's you", Continue greyed out) and
+leaves a small root process behind, listening on /run/linux-hello-camera/confirm/<pid>.sock, where <pid>
+is the process doing the authentication (sudo or polkit-agent-helper-1). After a face match, the
+engine runs confirm-hook, which connects there: the broker lights up Continue and passes the
+answer back. "failed" only runs when the face wasn't recognised, and tells the dialog.
+
+This only shows things. The decision is made by confirm-hook after a face match, and only
+root can reach the socket. Any problem here just means no early dialog; confirm-hook then
+opens its own.
+"""
+
+import os
+import pwd
+import select
+import socket
+import subprocess
+import sys
+import time
+
+sys.path.insert(0, "/usr/lib/linux-hello-camera")
+import linux_hello_camera_common as common  # noqa: E402
+
+KINDS = {"sudo": "sudo", "polkit-1": "polkit"}
+MAX_LIFETIME = 180  # seconds
+
+
+def start():
+    service = os.environ.get("PAM_SERVICE", "")
+    kind = KINDS.get(service)
+    if kind is None or os.environ.get("PAM_TYPE") != "auth" or os.geteuid() != 0:
+        return 0
+    if not common.confirm_enabled(service):
+        return 0
+    try:
+        user = pwd.getpwnam(os.environ.get("PAM_USER", ""))
+    except KeyError:
+        return 0
+    # The engine skips users without enrolled faces, so a dialog would only flash and then
+    # say "Couldn't recognise you" before the password prompt
+    if not common.has_faces(user.pw_name):
+        return 0
+    env = common.desktop_env(user)
+    if env is None:
+        return 0
+
+    pam_pid = os.getppid()
+    detail = common.sudo_command(pam_pid) if kind == "sudo" else ""
+    timeout = common.confirm_timeout()
+    # Listen before returning, so the socket exists by the time the face check matches
+    server = common.listen(pam_pid)
+
+    # Detach so PAM can go on to the face check straight away
+    child = os.fork()
+    if child:
+        server.close()
+        os.waitpid(child, 0)
+        return 0
+    os.setsid()
+    if os.fork():
+        os._exit(0)
+    devnull = os.open(os.devnull, os.O_RDWR)
+    for fd in (0, 1, 2):
+        os.dup2(devnull, fd)
+    try:
+        broker(server, pam_pid, kind, detail, user, env, timeout)
+    finally:
+        os._exit(0)
+
+
+def reply(conn, answer):
+    try:
+        conn.sendall(b"yes\n" if answer == "continue" else b"no\n")
+    except OSError:
+        pass
+    conn.close()
+
+
+def read_line(conn):
+    conn.settimeout(2)
+    data = b""
+    while not data.endswith(b"\n") and len(data) < 256:
+        chunk = conn.recv(256)
+        if not chunk:
+            break
+        data += chunk
+    return data.decode(errors="replace").strip()
+
+
+def broker(server, pam_pid, kind, detail, user, env, timeout):
+    path = common.socket_path(pam_pid)
+    dialog = subprocess.Popen([common.DIALOG, "--kind", kind, "--detail", detail, "--timeout", str(timeout), "--wait"],
+                              stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL, env=env, **common.as_user(user))
+    answer = None      # "continue" or "cancel" once the dialog has one
+    hook = None       # confirm-hook's connection, waiting for the answer
+    settled = False    # the face check has reported a match or a failure
+    deadline = time.monotonic() + MAX_LIFETIME
+    try:
+        while time.monotonic() < deadline and os.path.exists(f"/proc/{pam_pid}"):
+            watch = [server] + ([dialog.stdout] if answer is None else [])
+            ready, _, _ = select.select(watch, [], [], 0.5)
+
+            if server in ready:
+                conn, _ = server.accept()
+                try:
+                    message = read_line(conn)
+                except OSError:
+                    conn.close()
+                    continue
+                if message.startswith("matched"):
+                    settled = True
+                    if answer is not None:
+                        reply(conn, answer)
+                    else:
+                        hook = conn
+                        send(dialog, message)
+                elif message == "failed":
+                    settled = True
+                    if answer is None:
+                        send(dialog, "failed")
+                    conn.close()
+                else:
+                    conn.close()
+
+            if dialog.stdout in ready:
+                line = dialog.stdout.readline().strip()
+                answer = "continue" if line == b"continue" else "cancel"
+                if hook:
+                    reply(hook, answer)
+                    hook = None
+
+            if settled and hook is None and dialog.poll() is not None:
+                break
+    finally:
+        if hook:
+            reply(hook, "cancel")
+        if dialog.poll() is None:
+            dialog.kill()
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
+def send(dialog, message):
+    try:
+        dialog.stdin.write((message + "\n").encode())
+        dialog.stdin.flush()
+    except OSError:
+        pass
+
+
+def failed():
+    path = common.trusted_socket(os.getppid())
+    if path is None:
+        return 0
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
+            conn.settimeout(2)
+            conn.connect(path)
+            conn.sendall(b"failed\n")
+    except OSError:
+        pass
+    return 0
+
+
+def main(argv):
+    try:
+        if argv == ["start"]:
+            return start()
+        if argv == ["failed"]:
+            return failed()
+    except Exception:
+        pass  # never get in the way of authentication
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

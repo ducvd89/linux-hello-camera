@@ -1,0 +1,31 @@
+# Linux Hello Camera. The app changes this file through its helper; you can edit it
+# by hand too, but comments are not kept when the app saves a setting.
+schema_version: 1
+disabled: false                 # master switch: face unlock is skipped everywhere when true
+camera: ''                      # the IR camera, e.g. /dev/v4l/by-path/...-video-index2 (set by the installer)
+timeout_ms: 4000                # give up after this long without a match
+abort_if_lid_closed: true
+abort_if_ssh: true              # skip face unlock for remote (SSH) sessions
+ignore_services: []             # PAM services where face unlock is skipped
+detection:
+  model: yolov8n-face.onnx
+  threshold: 0.5
+recognition:
+  model: edgeface_s_gamma_05.onnx
+  threshold: 0.5                # cosine similarity needed for a picture to match
+  frames_needed: 2              # matching lit pictures needed (out of the last 3)
+ir_liveness:                    # real face vs photo or screen, using the IR light's strobe
+  enabled: true
+  min_pairs: 2                  # lit/unlit pairs that must pass
+  min_face_gain: 25.0           # mean(face lit) - mean(face unlit), grey levels
+  min_gain_ratio: 1.8           # face gain / background gain
+storage:
+  tpm_encryption: auto          # auto | on | off. auto = on with a TPM 2.0 and Secure Boot
+ai_antispoof:
+  enabled: false
+  model: minifas_v2.onnx
+  threshold: 0.8
+confirm:
+  enabled: true                 # ask before approving these services after a match
+  services: [sudo, polkit-1]
+  timeout_s: 15
