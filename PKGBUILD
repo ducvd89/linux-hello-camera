@@ -14,7 +14,7 @@ depends=('python' 'python-gobject' 'gtk4' 'libadwaita' 'polkit' 'ffmpeg' 'v4l-ut
 makedepends=('cmake' 'ninja' 'git')
 backup=('etc/linux-hello-camera/config.yaml')
 
-_models=https://github.com/TickLabVN/biopass/releases/download/1.4.1
+_models=https://github.com/ducvd89/linux-hello-camera/releases/download/models-v1
 source=("$_models/yolov8n-face.onnx"
         "$_models/edgeface_s_gamma_05.onnx"
         "$_models/edgeface_xs_gamma_06.onnx"

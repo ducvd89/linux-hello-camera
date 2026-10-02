@@ -33,7 +33,8 @@ install.sh
 Models: `yolov8n-face.onnx` (detection), `edgeface_s_gamma_05.onnx` (default recognition),
 `edgeface_xs_gamma_06.onnx` (faster recognition), `minifas_v2.onnx` and
 `mobilenetv3_antispoof.onnx` (optional AI anti-spoofing, trained on RGB, off by default). Source:
-`https://github.com/TickLabVN/biopass/releases/download/1.4.1/<name>`; sha256 pinned in the PKGBUILD.
+`https://github.com/ducvd89/linux-hello-camera/releases/download/models-v1/<name>` (unchanged copies of the
+models published with biopass 1.4.1; sources and licences in the release notes); sha256 pinned in the PKGBUILD.
 
 ## config.yaml
 
