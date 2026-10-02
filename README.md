@@ -99,5 +99,19 @@ This turns face unlock off everywhere and removes the package. Your stored face 
 ## Credits and license
 
 MIT. The face engine in `engine/` is based on [biopass](https://github.com/TickLabVN/biopass)
-(MIT, TickLab), and uses its face models. This project started as a fork of
-[Howdy](https://github.com/boltgolt/howdy) by boltgolt; no Howdy code remains.
+(MIT, TickLab). This project started as a fork of [Howdy](https://github.com/boltgolt/howdy) by
+boltgolt; no Howdy code remains.
+
+### Face models
+
+The engine uses these models, in the ONNX versions published with
+[biopass 1.4.1](https://github.com/TickLabVN/biopass/releases/tag/1.4.1). The installer downloads
+them from this project's [models-v1 release](https://github.com/ducvd89/linux-hello-camera/releases/tag/models-v1),
+where they're hosted unchanged. Each keeps the licence of its original project.
+
+| Model | Used for | From | Licence |
+|---|---|---|---|
+| YOLOv8n-face | Finding the face | [YOLO-Face](https://github.com/akanametov/yolo-face) by akanametov | GPL-3.0 |
+| EdgeFace S and XS | Recognising the face | [EdgeFace](https://github.com/otroshi/edgeface) by Idiap Research Institute | BSD-3-Clause |
+| MiniFASNet | AI anti-spoofing (optional, off by default) | [Silent-Face-Anti-Spoofing](https://github.com/minivision-ai/Silent-Face-Anti-Spoofing) by Minivision | Apache-2.0 |
+| MobileNetV3 anti-spoofing | AI anti-spoofing (optional, off by default) | [biopass](https://github.com/TickLabVN/biopass) by TickLab | MIT |
