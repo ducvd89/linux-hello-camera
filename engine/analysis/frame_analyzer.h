@@ -28,6 +28,7 @@ class FrameAnalyzer {
  private:
   struct Entry {
     Frame frame;
+    double mean;
     bool lit;
     bool analysed;
   };

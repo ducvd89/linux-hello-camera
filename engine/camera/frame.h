@@ -26,6 +26,18 @@ double meanBrightness(const GreyImage& image);
 
 inline bool isLit(double mean) { return mean >= kLitMeanMin; }
 
+// Smallest brightness swing between nearby frames that counts as the emitter strobing.
+inline constexpr double kMinStrobeContrast = 8.0;
+
+// How many frames either side a frame is compared with by classifyLit.
+inline constexpr size_t kLitWindowRadius = 2;
+
+// Lit/unlit for each of a run of consecutive frame means. Ambient IR (daylight) can lift unlit
+// frames far above kLitMeanMin, so each frame is judged against its neighbours within
+// kLitWindowRadius: lit when brighter than the midpoint of their range. Where the neighbourhood
+// does not swing by kMinStrobeContrast (emitter not strobing), falls back to isLit.
+std::vector<bool> classifyLit(const std::vector<double>& means);
+
 // A frame as the pairing logic sees it.
 struct FrameStamp {
   int64_t timestamp_us;

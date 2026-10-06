@@ -24,6 +24,23 @@ double meanBrightness(const GreyImage& image) {
   return static_cast<double>(sum) / static_cast<double>(image.data.size());
 }
 
+std::vector<bool> classifyLit(const std::vector<double>& means) {
+  std::vector<bool> lit(means.size());
+  for (size_t i = 0; i < means.size(); ++i) {
+    const size_t first = i > kLitWindowRadius ? i - kLitWindowRadius : 0;
+    const size_t last = std::min(means.size() - 1, i + kLitWindowRadius);
+    const auto [lo, hi] =
+        std::minmax_element(means.begin() + static_cast<std::ptrdiff_t>(first),
+                            means.begin() + static_cast<std::ptrdiff_t>(last) + 1);
+    if (*hi - *lo < kMinStrobeContrast) {
+      lit[i] = isLit(means[i]);
+    } else {
+      lit[i] = means[i] > (*hi + *lo) / 2.0;
+    }
+  }
+  return lit;
+}
+
 int findUnlitPartner(const std::vector<FrameStamp>& frames, size_t lit_index, int64_t max_gap_us) {
   if (lit_index >= frames.size()) {
     return -1;

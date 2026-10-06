@@ -33,6 +33,33 @@ void testLitClassification() {
   CHECK_NEAR(meanBrightness(GreyImage(4, 4, 40)), 40.0, 1e-9);
 }
 
+void testClassifyLitInDaylight() {
+  // Observed in daylight: ambient IR lifts unlit frames to 27-50, all above kLitMeanMin, while
+  // auto exposure ramps both up.
+  const std::vector<double> means = {45.6, 26.7, 54.9, 35.4, 57.1, 37.1, 59.6, 38.7};
+  const std::vector<bool> lit = classifyLit(means);
+  for (size_t i = 0; i < means.size(); ++i) {
+    CHECK(lit[i] == (i % 2 == 0));
+  }
+
+  // In the dark the strobe still splits as before.
+  const std::vector<bool> dark = classifyLit({0.03, 40.0, 0.02, 38.0});
+  CHECK(!dark[0] && dark[1] && !dark[2] && dark[3]);
+
+  // A dropped frame (two unlit in a row) still classifies from the wider window.
+  const std::vector<bool> dropped = classifyLit({30.0, 31.0, 60.0, 30.0, 61.0});
+  CHECK(!dropped[0] && !dropped[1] && dropped[2] && !dropped[3] && dropped[4]);
+
+  // No strobe: fall back to the absolute level.
+  const std::vector<bool> steady = classifyLit({50.0, 51.0, 49.0});
+  CHECK(steady[0] && steady[1] && steady[2]);
+  const std::vector<bool> black = classifyLit({0.03, 0.04});
+  CHECK(!black[0] && !black[1]);
+
+  CHECK(classifyLit({}).empty());
+  CHECK(classifyLit({42.0})[0]);
+}
+
 void testPairing() {
   // L U L U at 15 fps (~67 ms apart).
   std::vector<FrameStamp> strobe = {{0, true}, {67000, false}, {134000, true}, {201000, false}};
@@ -123,6 +150,7 @@ void testOpenFailure() {
 void testCamera() {
   testUniform();
   testLitClassification();
+  testClassifyLitInDaylight();
   testPairing();
   testReopenOnUniformFrames();
   testOpenFailure();

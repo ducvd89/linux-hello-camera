@@ -10,10 +10,20 @@ constexpr size_t kHistoryFrames = 8;
 }  // namespace
 
 void FrameAnalyzer::push(Frame frame, std::vector<Observation>& out) {
-  const bool lit = isLit(meanBrightness(frame.image));
-  history_.push_back({std::move(frame), lit, false});
+  const double mean = meanBrightness(frame.image);
+  history_.push_back({std::move(frame), mean, false, false});
   if (history_.size() > kHistoryFrames) {
     history_.pop_front();
+  }
+  // Reclassify the whole history: a frame's verdict can change once its next neighbour is known.
+  std::vector<double> means;
+  means.reserve(history_.size());
+  for (const Entry& e : history_) {
+    means.push_back(e.mean);
+  }
+  const std::vector<bool> lit = classifyLit(means);
+  for (size_t i = 0; i < history_.size(); ++i) {
+    history_[i].lit = lit[i];
   }
   if (history_.size() >= 2) {
     analyseIfReady(history_.size() - 2, out);
@@ -36,7 +46,7 @@ void FrameAnalyzer::analyseIfReady(size_t index, std::vector<Observation>& out) 
   Observation obs;
   obs.lit_seq = entry.frame.seq;
   obs.timestamp_us = entry.frame.timestamp_us;
-  obs.lit_mean = meanBrightness(entry.frame.image);
+  obs.lit_mean = entry.mean;
 
   const std::vector<Detection> faces = detector_.inference(toRgb(entry.frame.image));
   if (!faces.empty()) {
