@@ -52,9 +52,10 @@ class TemplateStore {
   // decrypted (it then stays as it is and the user must enrol again).
   ConvertStatus convert(const std::string& user, Storage target, std::string& error);
 
-  // Deletes the entry; `found` tells whether it existed. Needs a readable template.
+  // Deletes the entry with this id, or with `face` set, every entry of that face; `found` tells
+  // whether anything matched. Needs a readable template.
   bool removeEntry(const std::string& user, const std::string& id, const std::string& model,
-                   Storage target, bool& found, std::string& error);
+                   Storage target, bool& found, std::string& error, const std::string& face = "");
 
   // Deletes the user's template in either form.
   bool clear(const std::string& user, std::string& error);

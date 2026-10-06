@@ -187,7 +187,7 @@ ConvertStatus TemplateStore::convert(const std::string& user, Storage target, st
 
 bool TemplateStore::removeEntry(const std::string& user, const std::string& id,
                                 const std::string& model, Storage target, bool& found,
-                                std::string& error) {
+                                std::string& error, const std::string& face) {
   found = false;
   LoadResult loaded = load(user, model, target);
   if (loaded.status != LoadStatus::kOk) {
@@ -196,12 +196,19 @@ bool TemplateStore::removeEntry(const std::string& user, const std::string& id,
   }
   Template& t = loaded.tmpl;
   const auto it = std::remove_if(t.entries.begin(), t.entries.end(),
-                                 [&](const TemplateEntry& e) { return e.id == id; });
+                                 [&](const TemplateEntry& e) {
+                                   return face.empty() ? e.id == id : e.face == face;
+                                 });
   if (it == t.entries.end()) {
     return true;
   }
   found = true;
   t.entries.erase(it, t.entries.end());
+  for (auto name = t.names.begin(); name != t.names.end();) {
+    const bool used = std::any_of(t.entries.begin(), t.entries.end(),
+                                  [&](const TemplateEntry& e) { return e.face == name->first; });
+    name = used ? std::next(name) : t.names.erase(name);
+  }
   if (t.entries.empty()) {
     return clear(user, error);
   }

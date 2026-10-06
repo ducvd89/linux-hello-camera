@@ -6,13 +6,27 @@
 namespace lhc {
 
 // Requests of the daemon protocol (DESIGN.md): one JSON object per line.
-enum class Cmd { kAuth, kTest, kEnroll, kList, kRemove, kClear, kMigrate, kSetEncryption, kStatus };
+enum class Cmd {
+  kAuth,
+  kTest,
+  kEnroll,
+  kList,
+  kRemove,
+  kRename,
+  kClear,
+  kMigrate,
+  kSetEncryption,
+  kStatus
+};
 
 struct Request {
   Cmd cmd = Cmd::kStatus;
   std::string username;
   std::string service;  // auth
-  std::string id;       // remove
+  std::string id;       // remove: one picture
+  std::string face;     // enroll: add to this face instead of a new one; remove: the whole face;
+                        // rename
+  std::string name;     // enroll (a new face), rename: what the user calls the face
   std::string value;    // set-encryption: on | off | auto
   bool remote = false;  // auth: the PAM caller reported a remote session
   int count = 5;        // enroll
@@ -22,6 +36,12 @@ struct Request {
 inline constexpr size_t kMaxRequestBytes = 4096;
 
 inline constexpr int kMaxEnrollCount = 20;
+
+// Longest face name, in bytes.
+inline constexpr size_t kMaxFaceNameBytes = 128;
+
+// A face name: 1 to kMaxFaceNameBytes bytes of UTF-8 text without control characters.
+bool validFaceName(const std::string& name);
 
 // A login name that is safe to use in a file name: 1 to 64 of [A-Za-z0-9._@-], not starting with
 // '.' or '-'.

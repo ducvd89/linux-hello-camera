@@ -148,8 +148,9 @@ def has_faces(username):
 
 def parse_face_list(text):
     """Turn the output of `linux-hello-camera-helper list` into a dict for the app:
-    {"state": "ok", "entries": [{"id", "created"}], "encryption": ..., "detail": ...}
-    where state is ok, not_enrolled, needs_reenrol or error."""
+    {"state": "ok", "entries": [{"id", "created", "face"}], "names": {face: name}, "encryption": ..., "detail": ...}
+    where face is the id of the face (person or look) the picture belongs to, and state is ok,
+    not_enrolled, needs_reenrol or error."""
     reply = None
     for line in reversed((text or "").splitlines()):
         if line.strip().startswith("{"):
@@ -167,13 +168,33 @@ def parse_face_list(text):
         for entry in reply.get("entries") or []:
             if isinstance(entry, dict) and isinstance(entry.get("id"), str) and re.fullmatch(r"[0-9]{1,20}", entry["id"]):
                 created = entry.get("created")
+                face = entry.get("face")
+                # Engines before faces existed send none: one face for everything
+                face = face if isinstance(face, str) and re.fullmatch(r"[0-9]{1,20}", face) else ""
                 entries.append({"id": entry["id"],
-                                "created": created if isinstance(created, (int, float)) and not isinstance(created, bool) else None})
+                                "created": created if isinstance(created, (int, float)) and not isinstance(created, bool) else None,
+                                "face": face})
         encryption = reply.get("encryption") if reply.get("encryption") in ENCRYPTION_MODES else None
-        return {"state": "ok", "entries": entries, "encryption": encryption, "detail": ""}
+        names = reply.get("names") if isinstance(reply.get("names"), dict) else {}
+        names = {face: name for face, name in names.items() if isinstance(name, str) and name.strip()}
+        return {"state": "ok", "entries": entries, "names": names, "encryption": encryption, "detail": ""}
     if result in ("not_enrolled", "needs_reenrol"):
-        return {"state": result, "entries": [], "encryption": None, "detail": detail}
-    return {"state": "error", "entries": [], "encryption": None, "detail": detail or "Unexpected answer from the engine"}
+        return {"state": result, "entries": [], "names": {}, "encryption": None, "detail": detail}
+    return {"state": "error", "entries": [], "names": {}, "encryption": None,
+            "detail": detail or "Unexpected answer from the engine"}
+
+
+def group_faces(entries, names=None):
+    """The entries of parse_face_list grouped by face, in the order each face first appears:
+    [{"face": id, "name": name or "", "entries": [...], "created": earliest known time or None}]."""
+    faces = {}
+    for entry in entries:
+        group = faces.setdefault(entry["face"], {"face": entry["face"], "name": (names or {}).get(entry["face"], ""),
+                                                 "entries": [], "created": None})
+        group["entries"].append(entry)
+        if entry["created"] is not None and (group["created"] is None or entry["created"] < group["created"]):
+            group["created"] = entry["created"]
+    return list(faces.values())
 
 
 # ---------------------------------------------------------------- TPM encryption of face data

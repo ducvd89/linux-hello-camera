@@ -5,8 +5,11 @@ Runs as root through pkexec. It only ever acts on the account of the user
 who invoked pkexec, and only accepts a fixed set of commands and config keys.
 
 Commands:
-    enroll                     add the caller's face (streams PROGRESS lines)
-    remove-face ID             delete one of the caller's face entries (a number from `list`)
+    enroll [NAME]              add a new face for the caller, called NAME (streams PROGRESS lines)
+    improve-face FACE          add more pictures to one of the caller's faces (a face id from `list`)
+    rename-face FACE NAME      give one of the caller's faces a new name
+    remove-face ID             delete one of the caller's face pictures (a number from `list`)
+    remove-face-group FACE     delete a face with all its pictures (a face id from `list`)
     clear-faces                delete all of the caller's face data
     test                       run a recognition attempt, prints one JSON line
     set-encryption on|off|auto lock face data to the security chip (TPM) or not; the engine
@@ -129,14 +132,30 @@ def write_atomic(path, text, mode):
 
 # ---------------------------------------------------------------- faces
 
-# Entry ids from `list` are digits only (milliseconds since the epoch)
+# Entry and face ids from `list` are digits only (milliseconds since the epoch)
 FACE_ID = re.compile(r"[0-9]{1,20}", re.ASCII)
 
 
-def cmd_enroll(user):
+def check_face_name(name):
+    # Mirrors the engine: 1 to 128 bytes of UTF-8 text, no control characters
+    try:
+        size = len(name.encode("utf-8"))
+    except UnicodeEncodeError:  # undecodable bytes on the command line
+        die("Invalid face name.")
+    if not 1 <= size <= 128 or any(ord(c) < 0x20 or ord(c) == 0x7f for c in name):
+        die("Invalid face name.")
+    return name
+
+
+def cmd_enroll(user, name=None, face=None):
     # Forward the engine's lines one by one, flushed, so the app can show progress live.
-    # Enrolling always adds to what is there.
-    proc = subprocess.Popen([ENGINE, "enroll", "--username", user, "--count", str(ENROLL_COUNT)],
+    # Enrolling always adds to what is there: a new face called NAME, or more pictures of FACE.
+    args = [ENGINE, "enroll", "--username", user, "--count", str(ENROLL_COUNT)]
+    if face is not None:
+        args += ["--face", check_face_id(face)]
+    elif name is not None:
+        args += ["--name", check_face_name(name)]
+    proc = subprocess.Popen(args,
                             env=engine_env(), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, text=True, errors="replace")
     for line in proc.stdout:
@@ -168,6 +187,15 @@ def cmd_set_encryption(value):
     if value not in common.TPM_SETTINGS:
         die("set-encryption takes on, off or auto")
     return engine_reply(["set-encryption", value])
+
+
+def cmd_rename_face(user, face, name):
+    return engine_reply(["rename", "--username", user, "--face", check_face_id(face),
+                         "--name", check_face_name(name)])
+
+
+def cmd_remove_face_group(user, face):
+    return engine_reply(["remove", "--username", user, "--face", check_face_id(face)])
 
 
 def cmd_clear_faces(user):
@@ -400,12 +428,19 @@ def main(argv):
 
     # Face images belong to whoever started pkexec. The system-wide commands below need no
     # user, so the installer and the package hooks can run them as plain root.
-    if cmd in ("enroll", "remove-face", "clear-faces", "test"):
+    if cmd in ("enroll", "improve-face", "rename-face", "remove-face", "remove-face-group",
+               "clear-faces", "test"):
         user = calling_user()
-        if cmd == "enroll" and not args:
-            return cmd_enroll(user)
+        if cmd == "enroll" and len(args) <= 1:
+            return cmd_enroll(user, *args)
+        if cmd == "improve-face" and len(args) == 1:
+            return cmd_enroll(user, face=args[0])
+        if cmd == "rename-face" and len(args) == 2:
+            return cmd_rename_face(user, *args)
         if cmd == "remove-face" and len(args) == 1:
             return cmd_remove_face(user, args[0])
+        if cmd == "remove-face-group" and len(args) == 1:
+            return cmd_remove_face_group(user, args[0])
         if cmd == "clear-faces" and not args:
             return cmd_clear_faces(user)
         if cmd == "test" and not args:

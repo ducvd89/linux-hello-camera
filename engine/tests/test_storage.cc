@@ -79,6 +79,20 @@ void testTemplateJson() {
   one.entries.push_back({"1", 1, {1.0f}});
   CHECK(templateToJson(one).find("\"AACAPw==\"") != std::string::npos);
 
+  // Faces and their names survive; pictures from before faces existed join the first one's face.
+  Template faces = sampleTemplate();
+  faces.entries[0].face = "1000";
+  faces.entries[1].face = "2000";
+  faces.names["2000"] = "Đức";
+  CHECK(templateFromJson(templateToJson(faces), back, error));
+  CHECK(back.entries[0].face == "1000" && back.entries[1].face == "2000" &&
+        back.names == faces.names);
+  CHECK(templateFromJson("{\"version\":1,\"model\":\"m\",\"dim\":1,\"entries\":["
+                         "{\"id\":\"7\",\"created\":1,\"embedding\":\"AACAPw==\"},"
+                         "{\"id\":\"8\",\"created\":1,\"embedding\":\"AACAPw==\"}]}",
+                         back, error));
+  CHECK(back.entries[0].face == "7" && back.entries[1].face == "7" && back.names.empty());
+
   CHECK(!templateFromJson("not json", back, error));
   CHECK(!templateFromJson("{\"version\":2,\"model\":\"m\",\"dim\":1,\"entries\":[]}", back, error));
   CHECK(
@@ -208,6 +222,18 @@ void testStoreBasics() {
   CHECK(store.removeEntry("alice", "2000", model, Storage::kTpmSb, found, error) && found);
   CHECK(store.load("alice", model, Storage::kTpmSb).status == LoadStatus::kNotEnrolled);
   CHECK(!exists(dir.file("templates/alice.tpm-sb.cred")));
+
+  // A whole face can be removed; its name goes with it.
+  Template two = sampleTemplate();
+  two.entries[0].face = "1000";
+  two.entries[1].face = "2000";
+  two.names = {{"1000", "A"}, {"2000", "B"}};
+  CHECK(store.save("bob", two, Storage::kNone, error));
+  CHECK(store.removeEntry("bob", "", model, Storage::kNone, found, error, "1000") && found);
+  const LoadResult left = store.load("bob", model, Storage::kNone);
+  CHECK(left.tmpl.entries.size() == 1 && left.tmpl.entries[0].face == "2000" &&
+        left.tmpl.names == (std::map<std::string, std::string>{{"2000", "B"}}));
+  CHECK(store.removeEntry("bob", "", model, Storage::kNone, found, error, "1000") && !found);
 
   CHECK(store.clear("bob", error));
   CHECK(!exists(dir.file("templates/bob.json")));

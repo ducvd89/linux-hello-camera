@@ -83,21 +83,35 @@ int main(int argc, char** argv) {
   auto test_cmd = app.add_subcommand("test", "Try a face match and print the result as JSON");
   test_cmd->add_option("--username,-u", test_user, "User to match")->required();
 
-  std::string enroll_user;
+  std::string enroll_user, enroll_face, enroll_name;
   int enroll_count = 5;
   auto enroll_cmd = app.add_subcommand("enroll", "Add face templates for a user (root only)");
   enroll_cmd->add_option("--username,-u", enroll_user, "User to enroll")->required();
   enroll_cmd->add_option("--count,-n", enroll_count, "Faces to capture")
       ->check(CLI::Range(1, lhc::kMaxEnrollCount));
+  auto enroll_face_opt = enroll_cmd->add_option(
+      "--face", enroll_face, "Add to this face from `list` (default: a new one)");
+  enroll_cmd->add_option("--name", enroll_name, "Name of the new face")->excludes(enroll_face_opt);
+
+  std::string rename_user, rename_face, rename_name;
+  auto rename_cmd = app.add_subcommand("rename", "Name an enrolled face (root only)");
+  rename_cmd->add_option("--username,-u", rename_user, "User")->required();
+  rename_cmd->add_option("--face", rename_face, "Face id from `list`")->required();
+  rename_cmd->add_option("--name", rename_name, "The new name")->required();
 
   std::string list_user;
   auto list_cmd = app.add_subcommand("list", "Print a user's enrolled faces as JSON");
   list_cmd->add_option("--username,-u", list_user, "User to list")->required();
 
-  std::string remove_user, remove_id;
-  auto remove_cmd = app.add_subcommand("remove", "Delete one enrolled face (root only)");
+  std::string remove_user, remove_id, remove_face;
+  auto remove_cmd =
+      app.add_subcommand("remove", "Delete one face picture, or a whole face (root only)");
   remove_cmd->add_option("--username,-u", remove_user, "User")->required();
-  remove_cmd->add_option("--id", remove_id, "Entry id from `list`")->required();
+  auto remove_id_opt = remove_cmd->add_option("--id", remove_id, "Entry id from `list`");
+  auto remove_face_opt =
+      remove_cmd->add_option("--face", remove_face, "Face id from `list`: all its pictures");
+  remove_id_opt->excludes(remove_face_opt);
+  remove_cmd->require_option(1);
 
   std::string clear_user;
   auto clear_cmd = app.add_subcommand("clear", "Delete all of a user's faces (root only)");
@@ -157,7 +171,7 @@ int main(int argc, char** argv) {
     return lhc::runTestCommand(context, test_user);
   }
   if (app.got_subcommand(enroll_cmd)) {
-    return lhc::runEnrollCommand(context, enroll_user, enroll_count);
+    return lhc::runEnrollCommand(context, enroll_user, enroll_count, enroll_face, enroll_name);
   }
   if (app.got_subcommand(list_cmd)) {
     return lhc::runQueryCommand(context, request(lhc::Cmd::kList, list_user));
@@ -168,6 +182,13 @@ int main(int argc, char** argv) {
   if (app.got_subcommand(remove_cmd)) {
     lhc::Request r = request(lhc::Cmd::kRemove, remove_user);
     r.id = remove_id;
+    r.face = remove_face;
+    return lhc::runChangeCommand(context, r);
+  }
+  if (app.got_subcommand(rename_cmd)) {
+    lhc::Request r = request(lhc::Cmd::kRename, rename_user);
+    r.face = rename_face;
+    r.name = rename_name;
     return lhc::runChangeCommand(context, r);
   }
   if (app.got_subcommand(clear_cmd)) {

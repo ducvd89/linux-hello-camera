@@ -53,7 +53,10 @@ class Engine {
   nlohmann::json enroll(const Request& request, const Emit& emit);
   nlohmann::json list(const Request& request);
   nlohmann::json remove(const Request& request);
+  nlohmann::json rename(const Request& request);
   nlohmann::json clear(const Request& request);
+  // Whether the user's readable template has pictures of `face`.
+  bool hasFace(const std::string& user, const std::string& face, const Config& config);
   nlohmann::json migrate();
   nlohmann::json setEncryption(const Request& request);
   nlohmann::json status();

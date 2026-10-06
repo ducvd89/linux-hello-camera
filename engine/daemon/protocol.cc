@@ -14,7 +14,8 @@ struct CmdName {
 constexpr CmdName kCmds[] = {
     {Cmd::kAuth, "auth"},       {Cmd::kTest, "test"},
     {Cmd::kEnroll, "enroll"},   {Cmd::kList, "list"},
-    {Cmd::kRemove, "remove"},   {Cmd::kClear, "clear"},
+    {Cmd::kRemove, "remove"},   {Cmd::kRename, "rename"},
+    {Cmd::kClear, "clear"},
     {Cmd::kMigrate, "migrate"}, {Cmd::kSetEncryption, "set-encryption"},
     {Cmd::kStatus, "status"},
 };
@@ -37,6 +38,14 @@ bool optionalString(const nlohmann::json& doc, const char* key, std::string& out
 }
 
 }  // namespace
+
+bool validFaceName(const std::string& name) {
+  if (name.empty() || name.size() > kMaxFaceNameBytes) {
+    return false;
+  }
+  // nlohmann::json already rejected invalid UTF-8; only control characters remain to refuse.
+  return std::none_of(name.begin(), name.end(), [](unsigned char c) { return c < 0x20 || c == 0x7f; });
+}
 
 bool validUsername(const std::string& name) {
   if (name.empty() || name.size() > 64 || name[0] == '.' || name[0] == '-') {
@@ -75,7 +84,9 @@ bool parseRequest(const std::string& line, Request& out, std::string& error) {
   r.cmd = cmd->cmd;
 
   if (!optionalString(doc, "username", r.username) || !optionalString(doc, "service", r.service) ||
-      !optionalString(doc, "id", r.id) || !optionalString(doc, "value", r.value)) {
+      !optionalString(doc, "id", r.id) || !optionalString(doc, "face", r.face) ||
+      !optionalString(doc, "name", r.name) ||
+      !optionalString(doc, "value", r.value)) {
     error = "malformed request";
     return false;
   }
@@ -102,8 +113,16 @@ bool parseRequest(const std::string& line, Request& out, std::string& error) {
     error = "bad count";
     return false;
   }
-  if (r.cmd == Cmd::kRemove && r.id.empty()) {
-    error = "missing id";
+  if (r.cmd == Cmd::kRemove && r.id.empty() == r.face.empty()) {
+    error = r.id.empty() ? "missing id" : "id and face both given";
+    return false;
+  }
+  if (r.cmd == Cmd::kEnroll && !r.name.empty() && (!r.face.empty() || !validFaceName(r.name))) {
+    error = "bad name";
+    return false;
+  }
+  if (r.cmd == Cmd::kRename && (r.face.empty() || !validFaceName(r.name))) {
+    error = r.face.empty() ? "missing face" : "bad name";
     return false;
   }
   if (r.cmd == Cmd::kSetEncryption && r.value != "on" && r.value != "off" && r.value != "auto") {
@@ -131,9 +150,23 @@ std::string requestToJson(const Request& request) {
       break;
     case Cmd::kEnroll:
       doc["count"] = request.count;
+      if (!request.face.empty()) {
+        doc["face"] = request.face;
+      }
+      if (!request.name.empty()) {
+        doc["name"] = request.name;
+      }
+      break;
+    case Cmd::kRename:
+      doc["face"] = request.face;
+      doc["name"] = request.name;
       break;
     case Cmd::kRemove:
-      doc["id"] = request.id;
+      if (request.face.empty()) {
+        doc["id"] = request.id;
+      } else {
+        doc["face"] = request.face;
+      }
       break;
     case Cmd::kSetEncryption:
       doc["value"] = request.value;

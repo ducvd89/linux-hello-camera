@@ -66,7 +66,31 @@ class Robustness(unittest.TestCase):
 
     def test_embeddings_are_never_passed_on(self):
         out = reply(result="ok", entries=[{"id": "1", "created": 1, "embedding": "AAAA"}])
-        self.assertEqual(set(parse(out)["entries"][0]), {"id", "created"})
+        self.assertEqual(set(parse(out)["entries"][0]), {"id", "created", "face"})
+
+
+class Faces(unittest.TestCase):
+    def test_pictures_are_grouped_by_face_with_names(self):
+        out = reply(result="ok", entries=[{"id": "1", "created": 30, "face": "1"},
+                                          {"id": "2", "created": 10, "face": "2"},
+                                          {"id": "3", "created": 20, "face": "1"}],
+                    names={"1": "Me", "2": "  ", "9": "gone"})
+        faces = parse(out)
+        groups = common.group_faces(faces["entries"], faces["names"])
+        self.assertEqual([(g["face"], g["name"], len(g["entries"]), g["created"]) for g in groups],
+                         [("1", "Me", 2, 20), ("2", "", 1, 10)])
+
+    def test_an_old_engine_without_faces_shows_one_face(self):
+        out = reply(result="ok", entries=[{"id": "1", "created": 1}, {"id": "2", "created": 2}])
+        faces = parse(out)
+        self.assertEqual(faces["names"], {})
+        self.assertEqual(len(common.group_faces(faces["entries"], faces["names"])), 1)
+
+    def test_bad_face_ids_and_names_are_dropped(self):
+        out = reply(result="ok", entries=[{"id": "1", "face": "../x"}], names={"1": 5, "2": ["x"]})
+        faces = parse(out)
+        self.assertEqual(faces["entries"][0]["face"], "")
+        self.assertEqual(faces["names"], {})
 
 
 if __name__ == "__main__":

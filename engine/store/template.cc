@@ -44,11 +44,16 @@ bool decodeEmbedding(const std::string& text, std::vector<float>& out) {
 std::string templateToJson(const Template& tmpl) {
   nlohmann::json entries = nlohmann::json::array();
   for (const TemplateEntry& e : tmpl.entries) {
-    entries.push_back(
-        {{"id", e.id}, {"created", e.created}, {"embedding", encodeEmbedding(e.embedding)}});
+    entries.push_back({{"id", e.id},
+                       {"created", e.created},
+                       {"face", e.face},
+                       {"embedding", encodeEmbedding(e.embedding)}});
   }
-  nlohmann::json doc = {
-      {"version", tmpl.version}, {"model", tmpl.model}, {"dim", tmpl.dim}, {"entries", entries}};
+  nlohmann::json doc = {{"version", tmpl.version},
+                        {"model", tmpl.model},
+                        {"dim", tmpl.dim},
+                        {"entries", entries},
+                        {"names", tmpl.names}};
   return doc.dump();
 }
 
@@ -63,16 +68,27 @@ bool templateFromJson(const std::string& text, Template& out, std::string& error
     }
     t.model = doc.at("model").get<std::string>();
     t.dim = doc.at("dim").get<int>();
+    std::string legacy_face;
     for (const auto& item : doc.at("entries")) {
       TemplateEntry e;
       e.id = item.at("id").get<std::string>();
       e.created = item.at("created").get<int64_t>();
+      e.face = item.value("face", std::string());
+      if (e.face.empty()) {
+        if (legacy_face.empty()) {
+          legacy_face = e.id;
+        }
+        e.face = legacy_face;
+      }
       if (!decodeEmbedding(item.at("embedding").get<std::string>(), e.embedding) ||
           static_cast<int>(e.embedding.size()) != t.dim) {
         error = "bad embedding in template";
         return false;
       }
       t.entries.push_back(std::move(e));
+    }
+    if (doc.contains("names")) {
+      t.names = doc.at("names").get<std::map<std::string, std::string>>();
     }
     out = std::move(t);
     return true;

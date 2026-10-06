@@ -78,8 +78,12 @@ starting values, to be calibrated on real recordings (see `probe`).
 ## Face templates
 
 Decrypted content (JSON): `{"version": 1, "model": "<recognition model file>", "dim": 512,
-"entries": [{"id": "<unix-ms>", "created": <unix-s>, "embedding": "<base64 little-endian float32>"}]}`.
-Each enrolled picture is one entry. A template made with a different recognition model than the
+"entries": [{"id": "<unix-ms>", "created": <unix-s>, "face": "<face id>", "embedding": "<base64 little-endian float32>"}],
+"names": {"<face id>": "<name>"}}`.
+Each enrolled picture is one entry. Pictures are grouped into faces (a person, or one look of a
+person); a face's id is the id of its first picture, and the user can name it (1 to 128 bytes of
+UTF-8, no control characters). Entries saved before faces existed have no `face` and all join the
+face of the first of them. A template made with a different recognition model than the
 configured one, or one that can't be decrypted (TPM cleared, host secret changed), counts as
 **needs re-enrolment**: auth returns ignore (password works), `list` reports it, the app asks the
 user to add their face again. Embeddings can't be turned back into a photo of the face.
@@ -108,9 +112,9 @@ newline-delimited JSON. The daemon reads the peer's uid/pid with SO_PEERCRED.
 |---|---|---|
 | `{"cmd":"auth","username":U,"service":S,"remote":bool}` | root, or the uid of U itself (the KDE lock screen asks as the user) | `{"result": ...}` with the same values as `test`, plus `"ignore"` |
 | `{"cmd":"test","username":U}` | root | `{"result":..., "best_score":..., "liveness_pairs":..., "elapsed_ms":..., ...}` |
-| `{"cmd":"enroll","username":U,"count":5}` | root | `{"progress":i,"total":N}` lines, then `{"result":"ok","added":n}` or `{"result":"error","detail":...}`; always appends |
-| `{"cmd":"list","username":U}` | root, or the uid of U | `{"result":"ok","entries":[{"id","created"}],"encryption":"tpm-sb"\|"tpm"\|"none","model":...}` or `{"result":"not_enrolled"}` / `{"result":"needs_reenrol","detail":...}` (never embeddings) |
-| `{"cmd":"remove","username":U,"id":ID}` / `{"cmd":"clear","username":U}` | root | `{"result":"ok"}` |
+| `{"cmd":"enroll","username":U,"count":5[,"name":NAME \| "face":F]}` | root | `{"progress":i,"total":N}` lines, then `{"result":"ok","added":n,"face":F}` or `{"result":"error","detail":...}`; always appends: a new face (named NAME), or more pictures of face F |
+| `{"cmd":"list","username":U}` | root, or the uid of U | `{"result":"ok","entries":[{"id","created","face"}],"names":{F:NAME},"encryption":"tpm-sb"\|"tpm"\|"none","model":...}` or `{"result":"not_enrolled"}` / `{"result":"needs_reenrol","detail":...}` (never embeddings) |
+| `{"cmd":"remove","username":U,"id":ID}` (one picture) or `{...,"face":F}` (a whole face) / `{"cmd":"rename","username":U,"face":F,"name":NAME}` / `{"cmd":"clear","username":U}` | root | `{"result":"ok"}` |
 | `{"cmd":"migrate"}` | root | `{"result":"ok","migrated":[users],"failed":[{"username","detail"}]}`; crops of a user that can't be embedded are kept and listed in `failed` |
 | `{"cmd":"set-encryption","value":"on"\|"off"\|"auto"}` | root | writes `storage.tpm_encryption`, converts all templates, `{"result":"ok","effective":"tpm-sb"\|"tpm"\|"none","converted":n}`; `"on"` without a TPM 2.0 → `{"result":"error","detail":"no TPM 2.0"}` |
 | `{"cmd":"status"}` | anyone | `{"tpm2":bool,"secure_boot":bool,"setting":"auto"\|"on"\|"off","effective":"tpm-sb"\|"tpm"\|"none"}` |
@@ -129,14 +133,14 @@ polkit's protocol channel. It logs to syslog (`LOG_AUTHPRIV`, ident `linux-hello
 |---|---|---|---|
 | `auth --username U [--service S]` | PAM module (as root for sudo/polkit/SDDM, as the user for the KDE lock screen) | nothing | 0 match, 1 no match, 2 ignore (disabled, not enrolled, ignored service, lid closed, remote (SSH) session, no camera) |
 | `test --username U` | app's root helper | one JSON line: `{"result": "ok"\|"not_recognised"\|"no_face"\|"liveness_failed"\|"not_enrolled"\|"needs_reenrol"\|"camera_unavailable"\|"too_dark"\|"busy"\|"error", "best_score": f, "liveness_pairs": n, "elapsed_ms": n}` | 0 if ok else 1 |
-| `enroll --username U [--count 5]` | app's root helper (root) | progress lines `PROGRESS i N`, then `OK n` or `ERR <reason>`. Adds to the user's existing template | 0 ok |
+| `enroll --username U [--count 5] [--name NAME \| --face F]` | app's root helper (root) | progress lines `PROGRESS i N`, then `OK n` or `ERR <reason>`. Adds to the user's existing template: a new face, or more pictures of face F | 0 ok |
 | `list --username U` | the app (as the user) or its root helper | the daemon's `list` reply as one JSON line | 0 |
-| `remove --username U --id ID`, `clear --username U`, `migrate`, `set-encryption on\|off\|auto` | app's root helper / package scripts (root) | the daemon's reply as one JSON line | 0 ok |
+| `remove --username U --id ID\|--face F`, `rename --username U --face F --name NAME`, `clear --username U`, `migrate`, `set-encryption on\|off\|auto` | app's root helper / package scripts (root) | the daemon's reply as one JSON line | 0 ok |
 | `status` | the app (as the user) | the daemon's `status` reply as one JSON line | 0 |
 | `probe [--seconds 5] [--camera DEV]` | developer / calibration | JSON lines per lit/unlit pair: face box, detection score, face gain, background gain, ratio | 0 |
 | `probe-dir DIR` | developer / tests | same as `probe`, reading recorded PNG frames + `session.json` (`frames: [{file, lit, mean}]`) | 0 |
 
-`auth`, `test`, `enroll`, `list`, `remove`, `clear` and `migrate` send the request to the daemon
+`auth`, `test`, `enroll`, `list`, `remove`, `rename`, `clear` and `migrate` send the request to the daemon
 (socket activation starts it). The helper keeps the checks that need the PAM caller's context
 (remote session, ignored service, lid) and the confirm hook; the daemon does the rest. If the
 daemon can't be reached, `auth` returns ignore.

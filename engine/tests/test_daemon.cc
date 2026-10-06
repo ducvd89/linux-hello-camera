@@ -50,6 +50,14 @@ void testProtocol() {
   CHECK(r.count == 5);
   r = parseOk(R"({"cmd":"remove","username":"alice","id":"1790000000100"})");
   CHECK(r.cmd == Cmd::kRemove && r.id == "1790000000100");
+  r = parseOk(R"({"cmd":"remove","username":"alice","face":"1790000000100"})");
+  CHECK(r.cmd == Cmd::kRemove && r.id.empty() && r.face == "1790000000100");
+  r = parseOk(R"({"cmd":"enroll","username":"alice","name":"Đức với kính"})");
+  CHECK(r.face.empty() && r.name == "Đức với kính");
+  r = parseOk(R"({"cmd":"enroll","username":"alice","face":"1000"})");
+  CHECK(r.face == "1000" && r.name.empty());
+  r = parseOk(R"({"cmd":"rename","username":"alice","face":"1000","name":"Me"})");
+  CHECK(r.cmd == Cmd::kRename && r.face == "1000" && r.name == "Me");
   CHECK(parseOk(R"({"cmd":"list","username":"alice"})").cmd == Cmd::kList);
   CHECK(parseOk(R"({"cmd":"clear","username":"alice"})").cmd == Cmd::kClear);
   CHECK(parseOk(R"({"cmd":"test","username":"alice"})").cmd == Cmd::kTest);
@@ -75,6 +83,16 @@ void testProtocol() {
   CHECK(parseFails(R"({"cmd":"enroll","username":"a","count":21})", "bad count"));
   CHECK(parseFails(R"({"cmd":"enroll","username":"a","count":"5"})", "malformed request"));
   CHECK(parseFails(R"({"cmd":"remove","username":"a"})", "missing id"));
+  CHECK(parseFails(R"({"cmd":"remove","username":"a","id":"1","face":"1"})",
+                   "id and face both given"));
+  CHECK(parseFails(R"({"cmd":"enroll","username":"a","face":"1","name":"x"})", "bad name"));
+  CHECK(parseFails(R"({"cmd":"enroll","username":"a","name":"a\nb"})", "bad name"));
+  CHECK(parseFails(R"({"cmd":"rename","username":"a","name":"x"})", "missing face"));
+  CHECK(parseFails(R"({"cmd":"rename","username":"a","face":"1"})", "bad name"));
+  CHECK(parseFails(R"({"cmd":"rename","username":"a","face":"1","name":")" +
+                       std::string(129, 'x') + R"("})",
+                   "bad name"));
+  CHECK(parseFails(R"({"cmd":"rename","username":"a","face":"1","name":5})", "malformed request"));
   CHECK(parseFails(R"({"cmd":"set-encryption","value":"maybe"})", "bad value"));
   CHECK(parseFails(R"({"cmd":"set-encryption"})", "bad value"));
   CHECK(parseFails(std::string(5000, ' ') + R"({"cmd":"status"})", "request too long"));
@@ -87,13 +105,18 @@ void testProtocol() {
   // Requests survive a round trip through the client's serialiser.
   for (const char* line : {R"({"cmd":"auth","username":"alice","service":"sudo","remote":true})",
                            R"({"cmd":"enroll","username":"alice","count":7})",
+                           R"({"cmd":"enroll","username":"alice","count":7,"name":"Me"})",
+                           R"({"cmd":"enroll","username":"alice","count":7,"face":"9"})",
                            R"({"cmd":"remove","username":"alice","id":"5"})",
+                           R"({"cmd":"remove","username":"alice","face":"5"})",
+                           R"({"cmd":"rename","username":"alice","face":"5","name":"Me"})",
                            R"({"cmd":"set-encryption","value":"off"})", R"({"cmd":"status"})",
                            R"({"cmd":"migrate"})"}) {
     const Request a = parseOk(line);
     const Request b = parseOk(requestToJson(a));
     CHECK(a.cmd == b.cmd && a.username == b.username && a.service == b.service && a.id == b.id &&
-          a.value == b.value && a.remote == b.remote && a.count == b.count);
+          a.face == b.face && a.name == b.name && a.value == b.value && a.remote == b.remote &&
+          a.count == b.count);
   }
   CHECK(toLine(json{{"a", 1}}) == "{\"a\":1}\n");
   CHECK(errorReply("x") == (json{{"result", "error"}, {"detail", "x"}}));
@@ -116,8 +139,8 @@ void testAuthorization() {
   };
 
   // Root may do everything, for any user.
-  for (Cmd cmd : {Cmd::kAuth, Cmd::kTest, Cmd::kEnroll, Cmd::kList, Cmd::kRemove, Cmd::kClear,
-                  Cmd::kMigrate, Cmd::kSetEncryption, Cmd::kStatus}) {
+  for (Cmd cmd : {Cmd::kAuth, Cmd::kTest, Cmd::kEnroll, Cmd::kList, Cmd::kRemove, Cmd::kRename,
+                  Cmd::kClear, Cmd::kMigrate, Cmd::kSetEncryption, Cmd::kStatus}) {
     CHECK(isAuthorized(request(cmd, "alice"), kRoot, kRoot, lookup));
   }
   // The user may authenticate and list themselves, nothing else.
@@ -125,7 +148,8 @@ void testAuthorization() {
   CHECK(isAuthorized(request(Cmd::kList, "alice"), kAlice, kRoot, lookup));
   CHECK(isAuthorized(request(Cmd::kStatus, ""), kAlice, kRoot, lookup));
   for (Cmd cmd :
-       {Cmd::kTest, Cmd::kEnroll, Cmd::kRemove, Cmd::kClear, Cmd::kMigrate, Cmd::kSetEncryption}) {
+       {Cmd::kTest, Cmd::kEnroll, Cmd::kRemove, Cmd::kRename, Cmd::kClear, Cmd::kMigrate,
+        Cmd::kSetEncryption}) {
     CHECK(!isAuthorized(request(cmd, "alice"), kAlice, kRoot, lookup));
   }
   // Not for somebody else, nor for a user that does not exist.
@@ -392,15 +416,37 @@ void testEngineListRemoveClear() {
   json r = f.call(R"({"cmd":"list","username":"alice"})");
   CHECK(r["result"] == "ok" && r["encryption"] == "none" &&
         r["model"] == "edgeface_s_gamma_05.onnx");
-  CHECK(r["entries"].size() == 2 && r["entries"][0] == (json{{"id", "1000"}, {"created", 5}}));
+  // Pictures saved before faces existed all belong to one face, named after the first.
+  CHECK(r["entries"].size() == 2 &&
+        r["entries"][0] == (json{{"id", "1000"}, {"created", 5}, {"face", "1000"}}) &&
+        r["entries"][1]["face"] == "1000" && r["names"] == json::object());
   // Never embeddings.
   CHECK(r.dump().find("embedding") == std::string::npos);
+
+  // Faces can be named; only faces that exist.
+  CHECK(f.call(R"({"cmd":"rename","username":"alice","face":"1000","name":"Me"})") ==
+        (json{{"result", "ok"}}));
+  CHECK(f.call(R"({"cmd":"list","username":"alice"})")["names"] == (json{{"1000", "Me"}}));
+  CHECK(f.call(R"({"cmd":"rename","username":"alice","face":"2000","name":"x"})") ==
+        errorReply("no such face"));
+  CHECK(f.call(R"({"cmd":"enroll","username":"alice","face":"2000"})") ==
+        errorReply("no such face"));
 
   CHECK(f.call(R"({"cmd":"remove","username":"alice","id":"1000"})") == (json{{"result", "ok"}}));
   CHECK(f.call(R"({"cmd":"list","username":"alice"})")["entries"].size() == 1);
   CHECK(f.call(R"({"cmd":"remove","username":"alice","id":"1000"})")["result"] == "error");
   CHECK(f.call(R"({"cmd":"clear","username":"alice"})") == (json{{"result", "ok"}}));
   CHECK(f.call(R"({"cmd":"list","username":"alice"})")["result"] == "not_enrolled");
+
+  // A whole face goes at once, with its name.
+  f.enrol("carol", Storage::kNone);
+  CHECK(f.call(R"({"cmd":"rename","username":"carol","face":"1000","name":"C"})")["result"] ==
+        "ok");
+  CHECK(f.call(R"({"cmd":"remove","username":"carol","face":"9"})") ==
+        errorReply("no such face"));
+  CHECK(f.call(R"({"cmd":"remove","username":"carol","face":"1000"})") ==
+        (json{{"result", "ok"}}));
+  CHECK(f.call(R"({"cmd":"list","username":"carol"})")["result"] == "not_enrolled");
 
   // A template from another recognition model needs re-enrolment.
   f.enrol("bob", Storage::kNone, "some-other-model.onnx");
@@ -561,6 +607,7 @@ void testServerPeerCredentials() {
        {R"({"cmd":"clear","username":"me"})", R"({"cmd":"enroll","username":"me"})",
         R"({"cmd":"test","username":"me"})", R"({"cmd":"migrate"})",
         R"({"cmd":"remove","username":"me","id":"1000"})",
+        R"({"cmd":"rename","username":"me","face":"1000","name":"x"})",
         R"({"cmd":"set-encryption","value":"on"})"}) {
     r = ask(line);
     CHECK(r.status == CallStatus::kOk && r.reply == errorReply("not root"));

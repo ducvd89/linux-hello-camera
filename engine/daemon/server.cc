@@ -209,6 +209,7 @@ void Server::serve(int fd) {
         fd,
         toLine(errorReply(request.cmd == Cmd::kEnroll || request.cmd == Cmd::kTest ||
                                   request.cmd == Cmd::kClear || request.cmd == Cmd::kRemove ||
+                                  request.cmd == Cmd::kRename ||
                                   request.cmd == Cmd::kMigrate || request.cmd == Cmd::kSetEncryption
                               ? "not root"
                               : "not allowed")));

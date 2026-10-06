@@ -68,6 +68,8 @@ json Engine::handle(const Request& request, const Emit& emit) {
         return list(request);
       case Cmd::kRemove:
         return remove(request);
+      case Cmd::kRename:
+        return rename(request);
       case Cmd::kClear:
         return clear(request);
       case Cmd::kMigrate:
@@ -241,6 +243,10 @@ json Engine::enroll(const Request& request, const Emit& emit) {
     return errorReply("no camera configured");
   }
 
+  if (!request.face.empty() && !hasFace(user, request.face, config)) {
+    return errorReply("no such face");
+  }
+
   SessionGate::Lock session = gate_.acquire(options_.busy_wait);
   if (!session) {
     return json{{"result", "busy"}};
@@ -309,21 +315,34 @@ json Engine::enroll(const Request& request, const Emit& emit) {
   Template tmpl;
   if (existing.status == LoadStatus::kOk) {
     tmpl = std::move(existing.tmpl);
+  } else if (!request.face.empty()) {
+    return errorReply("no such face");
   } else {
     // Nothing yet, or a template the configured model can't use (or that can't be decrypted):
     // start again; this is how the user recovers from "needs re-enrolment".
     tmpl.model = config.recognition.model;
     tmpl.dim = static_cast<int>(added.front().embedding.size());
   }
+  // A new face is named after its first picture.
+  const std::string face = request.face.empty() ? added.front().id : request.face;
+  if (!request.face.empty() &&
+      std::none_of(tmpl.entries.begin(), tmpl.entries.end(),
+                   [&](const TemplateEntry& e) { return e.face == face; })) {
+    return errorReply("no such face");  // removed while the pictures were taken
+  }
   for (TemplateEntry& e : added) {
+    e.face = face;
     tmpl.entries.push_back(std::move(e));
+  }
+  if (!request.name.empty()) {
+    tmpl.names[face] = request.name;
   }
   if (!store_.save(user, tmpl, target, error)) {
     return errorReply("cannot save template: " + error);
   }
-  spdlog::info("user={} enrolled {} face(s), template has {}", user, request.count,
-               tmpl.entries.size());
-  return json{{"result", "ok"}, {"added", request.count}};
+  spdlog::info("user={} enrolled {} picture(s) for face {}, template has {}", user, request.count,
+               face, tmpl.entries.size());
+  return json{{"result", "ok"}, {"added", request.count}, {"face", face}};
 }
 
 json Engine::list(const Request& request) {
@@ -342,10 +361,11 @@ json Engine::list(const Request& request) {
   }
   json entries = json::array();
   for (const TemplateEntry& e : loaded.tmpl.entries) {
-    entries.push_back({{"id", e.id}, {"created", e.created}});
+    entries.push_back({{"id", e.id}, {"created", e.created}, {"face", e.face}});
   }
   return json{{"result", "ok"},
               {"entries", entries},
+              {"names", loaded.tmpl.names},
               {"encryption", storageName(loaded.storage)},
               {"model", loaded.tmpl.model}};
 }
@@ -356,10 +376,38 @@ json Engine::remove(const Request& request) {
   bool found = false;
   std::string error;
   if (!store_.removeEntry(request.username, request.id, config.recognition.model,
-                          effectiveStorage(config), found, error)) {
+                          effectiveStorage(config), found, error, request.face)) {
     return errorReply(error);
   }
-  return found ? json{{"result", "ok"}} : errorReply("no such entry");
+  return found ? json{{"result", "ok"}}
+               : errorReply(request.face.empty() ? "no such entry" : "no such face");
+}
+
+json Engine::rename(const Request& request) {
+  const Config config = configOrDefault();
+  const Storage target = effectiveStorage(config);
+  std::lock_guard<std::mutex> lock(store_mutex_);
+  reconcileUser(request.username, target);
+  LoadResult loaded = store_.load(request.username, config.recognition.model, target);
+  if (loaded.status != LoadStatus::kOk ||
+      std::none_of(loaded.tmpl.entries.begin(), loaded.tmpl.entries.end(),
+                   [&](const TemplateEntry& e) { return e.face == request.face; })) {
+    return errorReply("no such face");
+  }
+  loaded.tmpl.names[request.face] = request.name;
+  std::string error;
+  if (!store_.save(request.username, loaded.tmpl, target, error)) {
+    return errorReply("cannot save template: " + error);
+  }
+  return json{{"result", "ok"}};
+}
+
+bool Engine::hasFace(const std::string& user, const std::string& face, const Config& config) {
+  std::lock_guard<std::mutex> lock(store_mutex_);
+  const LoadResult loaded = store_.load(user, config.recognition.model, effectiveStorage(config));
+  return loaded.status == LoadStatus::kOk &&
+         std::any_of(loaded.tmpl.entries.begin(), loaded.tmpl.entries.end(),
+                     [&](const TemplateEntry& e) { return e.face == face; });
 }
 
 json Engine::clear(const Request& request) {

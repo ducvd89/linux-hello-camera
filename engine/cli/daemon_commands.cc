@@ -36,11 +36,14 @@ int runTestCommand(const ClientContext& context, const std::string& username) {
   return resultIs(reply, "ok") ? 0 : 1;
 }
 
-int runEnrollCommand(const ClientContext& context, const std::string& username, int count) {
+int runEnrollCommand(const ClientContext& context, const std::string& username, int count,
+                     const std::string& face, const std::string& name) {
   Request request;
   request.cmd = Cmd::kEnroll;
   request.username = username;
   request.count = count;
+  request.face = face;
+  request.name = name;
 
   const CallResult call = callDaemon(
       context, request, kEnrollMs + kBusyWaitMs + kSlackMs, [](const nlohmann::json& progress) {

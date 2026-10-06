@@ -496,9 +496,10 @@ class LinuxHelloCameraWindow(Adw.ApplicationWindow):
         confirm_group.add(self.confirm_row)
         page.add(confirm_group)
 
-        self.models_group = Adw.PreferencesGroup(title="Face Models",
+        self.models_group = Adw.PreferencesGroup(title="Faces",
                                                  description=self._faces_description(None))
-        add_btn = Gtk.Button(child=Adw.ButtonContent(icon_name="list-add-symbolic", label="Add"),
+        add_btn = Gtk.Button(child=Adw.ButtonContent(icon_name="list-add-symbolic", label="Add Face"),
+                             tooltip_text="Add another person, or yourself with a different look",
                              css_classes=["flat"])
         add_btn.connect("clicked", self._on_add_clicked)
         self.models_group.set_header_suffix(add_btn)
@@ -520,7 +521,7 @@ class LinuxHelloCameraWindow(Adw.ApplicationWindow):
         test_row.set_activatable_widget(test_btn)
         test_group.add(test_row)
 
-        self.clear_row = Adw.ActionRow(title="Remove all face pictures")
+        self.clear_row = Adw.ActionRow(title="Remove all faces")
         clear_btn = Gtk.Button(label="Remove All", valign=Gtk.Align.CENTER, css_classes=["destructive-action"])
         clear_btn.connect("clicked", self._on_clear_clicked)
         self.clear_row.add_suffix(clear_btn)
@@ -793,20 +794,37 @@ class LinuxHelloCameraWindow(Adw.ApplicationWindow):
             self._add_model_row(Adw.ActionRow(title="Face data could not be read",
                                               subtitle=GLib.markup_escape_text(faces["detail"])))
         elif state == "not_enrolled" or not faces["entries"]:
-            self._add_model_row(Adw.ActionRow(title="No face models yet",
+            self._add_model_row(Adw.ActionRow(title="No faces yet",
                                               subtitle="Add one to start using face unlock"))
-        for number, entry in enumerate(faces["entries"], 1):
-            when = time.strftime("%Y-%m-%d %H:%M", time.localtime(entry["created"])) \
-                if entry["created"] else "at an unknown time"
-            row = Adw.ActionRow(title=f"Face picture {number}", subtitle=f"Added {when}")
-            row.add_prefix(Gtk.Image(icon_name="avatar-default-symbolic"))
-            btn = Gtk.Button(icon_name="user-trash-symbolic", valign=Gtk.Align.CENTER,
-                             tooltip_text="Remove", css_classes=["flat"])
-            btn.connect("clicked", self._on_remove_clicked, entry["id"], number)
-            row.add_suffix(btn)
-            self._add_model_row(row)
+        for number, face in enumerate(common.group_faces(faces["entries"], faces["names"]), 1):
+            self._add_model_row(self._face_row(number, face))
         # Nothing to remove when nothing is enrolled
         self.clear_row.set_sensitive(state != "not_enrolled" and (state != "ok" or bool(faces["entries"])))
+
+    @staticmethod
+    def _when(created):
+        return time.strftime("%Y-%m-%d %H:%M", time.localtime(created)) if created else "at an unknown time"
+
+    def _face_row(self, number, face):
+        """One face (a person, or a look of one): its name, how many pictures, and actions."""
+        label = face["name"] or f"Face {number}"
+        count = len(face["entries"])
+        row = Adw.ActionRow(title=GLib.markup_escape_text(label),
+                            subtitle=f"{count} picture{'s' if count != 1 else ''} · added {self._when(face['created'])}")
+        row.add_prefix(Gtk.Image(icon_name="avatar-default-symbolic"))
+        improve = Gtk.Button(label="Improve", valign=Gtk.Align.CENTER,
+                             tooltip_text="Improve recognition: add more pictures of this face")
+        improve.connect("clicked", self._on_add_clicked, face["face"], label)
+        row.add_suffix(improve)
+        rename = Gtk.Button(icon_name="document-edit-symbolic", valign=Gtk.Align.CENTER,
+                            tooltip_text="Rename", css_classes=["flat"])
+        rename.connect("clicked", self._on_rename_clicked, face["face"], face["name"])
+        row.add_suffix(rename)
+        remove = Gtk.Button(icon_name="user-trash-symbolic", valign=Gtk.Align.CENTER,
+                            tooltip_text="Remove this face", css_classes=["flat"])
+        remove.connect("clicked", self._on_remove_face_clicked, face["face"], label)
+        row.add_suffix(remove)
+        return row
 
     def _add_model_row(self, row):
         self.models_group.add(row)
@@ -908,17 +926,62 @@ class LinuxHelloCameraWindow(Adw.ApplicationWindow):
         else:
             self.run_helper(["pam-disable", *services], success=f"Face unlock disabled for {row.get_title()}")
 
-    def _on_add_clicked(self, _btn):
-        dialog = Adw.AlertDialog(heading="Add Your Face",
-                                 body="Look straight into the camera. It takes 5 pictures one after "
-                                      "another; turn your head a little between them.")
+    @staticmethod
+    def _name_entry(text=""):
+        """A boxed name field for a dialog: (the widget to show, the entry row)."""
+        entry = Adw.EntryRow(title="Name", text=text, activates_default=True)
+        entry.set_max_length(32)
+        box = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE, css_classes=["boxed-list"])
+        box.append(entry)
+        return box, entry
+
+    def _on_add_clicked(self, _btn, face=None, label=None):
+        """Add a new face, or with FACE more pictures of that face (shown as LABEL)."""
+        entry = None
+        if face is None:
+            heading, running = "Add a Face", "Adding the Face"
+            body = ("Give it a name, then look straight into the camera. It takes 5 pictures one after "
+                    "another; turn your head a little between them. Use this for another person, or "
+                    "for yourself with a different look, such as with glasses.")
+        else:
+            heading, running = f"Improve “{label}”", f"Improving “{label}”"
+            body = ("Look straight into the camera. It takes 5 more pictures of this face. It helps "
+                    "most in the conditions where unlocking fails, such as other lighting or an angle.")
+        dialog = Adw.AlertDialog(heading=heading, body=body)
+        if face is None:
+            box, entry = self._name_entry()
+            dialog.set_extra_child(box)
         dialog.add_response("cancel", "Cancel")
         dialog.add_response("add", "Start")
         dialog.set_response_appearance("add", Adw.ResponseAppearance.SUGGESTED)
         dialog.set_default_response("add")
-        dialog.connect("response", lambda d, r: r == "add" and self._run_with_progress(
-            "Adding Your Face", "Look straight into the camera…", ["enroll"],
-            self._add_finished, self._add_progress))
+
+        def response(_d, r):
+            if r != "add":
+                return
+            if face is None:
+                name = entry.get_text().strip()
+                args = ["enroll", name] if name else ["enroll"]
+            else:
+                args = ["improve-face", face]
+            self._run_with_progress(running, "Look straight into the camera…", args,
+                                    lambda code, output: self._add_finished(code, output, label),
+                                    self._add_progress)
+        dialog.connect("response", response)
+        dialog.present(self)
+
+    def _on_rename_clicked(self, _btn, face, name):
+        dialog = Adw.AlertDialog(heading="Rename Face")
+        box, entry = self._name_entry(name)
+        dialog.set_extra_child(box)
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("rename", "Rename")
+        dialog.set_response_appearance("rename", Adw.ResponseAppearance.SUGGESTED)
+        dialog.set_default_response("rename")
+        dialog.set_response_enabled("rename", bool(name.strip()))
+        entry.connect("changed", lambda e: dialog.set_response_enabled("rename", bool(e.get_text().strip())))
+        dialog.connect("response", lambda d, r: r == "rename" and self.run_helper(
+            ["rename-face", face, entry.get_text().strip()], success="Face renamed"))
         dialog.present(self)
 
     @staticmethod
@@ -929,12 +992,14 @@ class LinuxHelloCameraWindow(Adw.ApplicationWindow):
             return f"Picture {words[1]} of {words[2]}. Keep looking at the camera…"
         return None
 
-    def _add_finished(self, code, output):
+    def _add_finished(self, code, output, label=None):
         lines = [l.strip() for l in output.splitlines() if l.strip()]
         done = next((l for l in reversed(lines) if l.startswith("OK")), None)
         if code == 0 and done:
-            count = done.split()[1] if len(done.split()) > 1 and done.split()[1].isdigit() else "Your"
-            return "Face Added", f"{count} pictures of your face were added. You can now test recognition."
+            count = done.split()[1] if len(done.split()) > 1 and done.split()[1].isdigit() else "The"
+            if label is not None:
+                return "Recognition Improved", f"{count} more pictures were added to “{label}”."
+            return "Face Added", f"{count} pictures of the face were added. You can now test recognition."
         error = next((l for l in reversed(lines) if l.startswith("ERR")), None)
         reason = error[3:].strip() if error else (lines[-1] if lines else f"Error code {code}")
         known = TEST_RESULTS.get(reason)
@@ -981,24 +1046,24 @@ class LinuxHelloCameraWindow(Adw.ApplicationWindow):
         if self.run_helper(args, on_line=on_line, on_done=on_done):
             dialog.present(self)
 
-    def _on_remove_clicked(self, _btn, face_id, number):
-        dialog = Adw.AlertDialog(heading="Remove Face Picture?",
-                                 body=f"Face picture {number} will no longer be used to recognise you.")
+    def _on_remove_face_clicked(self, _btn, face, label):
+        dialog = Adw.AlertDialog(heading=f"Remove “{label}”?",
+                                 body="All its pictures are removed. This face will no longer unlock the account.")
         dialog.add_response("cancel", "Cancel")
         dialog.add_response("remove", "Remove")
         dialog.set_response_appearance("remove", Adw.ResponseAppearance.DESTRUCTIVE)
         dialog.connect("response", lambda d, r: r == "remove" and self.run_helper(
-            ["remove-face", face_id], success="Face picture removed"))
+            ["remove-face-group", face], success=f"“{label}” removed"))
         dialog.present(self)
 
     def _on_clear_clicked(self, _btn):
-        dialog = Adw.AlertDialog(heading="Remove All Face Pictures?",
+        dialog = Adw.AlertDialog(heading="Remove All Faces?",
                                  body="Face unlock will stop working for this account until you add your face again.")
         dialog.add_response("cancel", "Cancel")
         dialog.add_response("clear", "Remove All")
         dialog.set_response_appearance("clear", Adw.ResponseAppearance.DESTRUCTIVE)
         dialog.connect("response", lambda d, r: r == "clear" and self.run_helper(
-            ["clear-faces"], success="All face pictures removed"))
+            ["clear-faces"], success="All faces removed"))
         dialog.present(self)
 
     def _on_use_camera(self, _btn):

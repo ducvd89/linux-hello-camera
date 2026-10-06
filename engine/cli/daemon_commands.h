@@ -12,13 +12,15 @@ namespace lhc {
 // `test`: the daemon's reply as one JSON line; 0 if the result is "ok".
 int runTestCommand(const ClientContext& context, const std::string& username);
 
-// `enroll`: `PROGRESS i N` lines, then `OK n` or `ERR <reason>`.
-int runEnrollCommand(const ClientContext& context, const std::string& username, int count);
+// `enroll`: `PROGRESS i N` lines, then `OK n` or `ERR <reason>`. An empty `face` starts a new
+// face, called `name` if that is given.
+int runEnrollCommand(const ClientContext& context, const std::string& username, int count,
+                     const std::string& face = "", const std::string& name = "");
 
 // `list` and `status`: the reply as one JSON line; 0 unless the daemon could not be asked.
 int runQueryCommand(const ClientContext& context, const Request& request);
 
-// `remove`, `clear`, `migrate`, `set-encryption`: the reply as one JSON line; 0 if it says "ok".
+// `remove`, `rename`, `clear`, `migrate`, `set-encryption`: the reply as one JSON line; 0 if it says "ok".
 int runChangeCommand(const ClientContext& context, const Request& request);
 
 }  // namespace lhc
