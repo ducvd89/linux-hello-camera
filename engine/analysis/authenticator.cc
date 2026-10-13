@@ -54,7 +54,7 @@ float medianOf(std::vector<float> values) {
 AuthReport runAuth(const Config& config, CameraStream& camera, Models& models,
                    const std::vector<std::vector<float>>& enrolled,
                    std::chrono::steady_clock::time_point start,
-                   std::chrono::steady_clock::time_point deadline) {
+                   std::chrono::steady_clock::time_point deadline, bool stop_when_backlit) {
   using Clock = std::chrono::steady_clock;
   const bool liveness_on = config.ir_liveness.enabled;
   const GainParams gain_params{config.ir_liveness.min_face_gain, config.ir_liveness.min_gain_ratio};
@@ -65,7 +65,8 @@ AuthReport runAuth(const Config& config, CameraStream& camera, Models& models,
 
   AuthReport report;
   report.best_score = -1.0f;
-  int frames = 0, lit_frames = 0, faces = 0;
+  int frames = 0, lit_frames = 0, faces = 0, good_frames = 0;
+  float max_face_gain = 0.0f;
   bool matched_but_not_good = false;
   bool succeeded = false;
   std::vector<float> face_gains, ratios;
@@ -81,6 +82,7 @@ AuthReport runAuth(const Config& config, CameraStream& camera, Models& models,
     if (obs.paired) {
       face_gains.push_back(obs.gain.face_gain);
       ratios.push_back(obs.gain.ratio);
+      max_face_gain = std::max(max_face_gain, obs.gain.face_gain);
     }
     if (live_pair) {
       ++report.liveness_pairs;
@@ -94,6 +96,7 @@ AuthReport runAuth(const Config& config, CameraStream& camera, Models& models,
       good = !models.antispoof->inference(obs.crop).spoof;
     }
     matched_but_not_good = matched_but_not_good || (matched && !good);
+    good_frames += good ? 1 : 0;
     tracker.add(good);
     succeeded = succeeded || tracker.satisfied();
   };
@@ -121,6 +124,11 @@ AuthReport runAuth(const Config& config, CameraStream& camera, Models& models,
       if (succeeded) {
         break;
       }
+    }
+    if (stop_when_backlit && !succeeded && lit_frames >= kBacklitCheckFrames && good_frames == 0 &&
+        max_face_gain < config.ir_liveness.min_face_gain) {
+      report.backlit = true;
+      break;
     }
   }
 

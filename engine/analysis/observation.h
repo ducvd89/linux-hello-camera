@@ -18,15 +18,17 @@ struct Observation {
 
   bool face_found = false;
   float det_score = 0.0f;
+  float boost_gamma = 1.0f;      // 1: found in the frame as captured; else in brighten(frame, it)
   Box box;
   Landmarks landmarks;
-  ImageRGB crop;                 // detection box, grey replicated to 3 channels
+  ImageRGB crop;                 // detection box (of the brightened frame if boosted), grey x3
   std::vector<float> embedding;  // empty without a face or a recognizer
 
   bool paired = false;  // an unlit partner was found
   uint32_t unlit_seq = 0;
   int64_t pair_gap_us = 0;
-  GainResult gain;
+  GainResult gain;     // always measured on the frames as captured
+  GlintResult glints;  // likewise
   int specular = 0;  // near-saturated pixels in the eye regions (lit frame)
 };
 

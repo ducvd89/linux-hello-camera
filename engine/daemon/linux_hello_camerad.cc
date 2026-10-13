@@ -28,7 +28,8 @@ int main(int argc, char** argv) {
   lhc::SystemdCreds crypto;
   return lhc::runDaemon(
       options, crypto,
-      [](const std::string& device, std::string& error) -> std::unique_ptr<lhc::FrameSource> {
-        return lhc::V4l2Camera::open(device, error);
+      [](const std::string& device, bool colour,
+         std::string& error) -> std::unique_ptr<lhc::FrameSource> {
+        return lhc::V4l2Camera::open(device, error, colour);
       });
 }

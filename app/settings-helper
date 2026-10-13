@@ -88,6 +88,8 @@ CONFIG_SCHEMA = {
     "ai_antispoof.enabled": BOOL,
     "ai_antispoof.model": ("choice", ANTISPOOF_MODELS),
     "ai_antispoof.threshold": ("float", 0.0, 1.0),
+    "backlight.enabled": BOOL,
+    "backlight.camera": ("device",),
     "confirm.enabled": BOOL,
     "confirm.timeout_s": ("int", 5, 60),
 }

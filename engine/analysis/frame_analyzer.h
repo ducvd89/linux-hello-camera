@@ -38,6 +38,7 @@ class FrameAnalyzer {
   FaceDetection& detector_;
   FaceRecognition* recognizer_;
   std::deque<Entry> history_;
+  float gamma_ = 1.0f;  // the brightening that last found a face (1: none)
 };
 
 }  // namespace lhc

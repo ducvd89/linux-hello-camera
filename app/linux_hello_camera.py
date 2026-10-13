@@ -241,7 +241,7 @@ def strobe_state(means):
     None while there are too few frames to tell."""
     if len(means) < 8:
         return None
-    if max(means) - min(means) < 8:
+    if max(means) - min(means) < 1:  # the engine's kMinStrobeContrast
         return False
     mid = (max(means) + min(means)) / 2
     lit = [m > mid for m in means]
@@ -616,6 +616,10 @@ class LinuxHelloCameraWindow(Adw.ApplicationWindow):
         live.add(advanced)
         self._switch(live, "ai_antispoof.enabled", "AI anti-spoofing (for colour cameras)",
                      "Experimental. Made for colour pictures, so leave it off with an IR camera")
+        self._switch(live, "backlight.enabled", "Unlock when backlit",
+                     "When a bright window behind you hides your face from the IR camera, check it with "
+                     "the colour camera too (its light turns on). Faces need colour pictures: use "
+                     "Improve after turning this on")
         page.add(live)
 
         beh = Adw.PreferencesGroup(title="Behaviour")
@@ -808,9 +812,15 @@ class LinuxHelloCameraWindow(Adw.ApplicationWindow):
     def _face_row(self, number, face):
         """One face (a person, or a look of one): its name, how many pictures, and actions."""
         label = face["name"] or f"Face {number}"
-        count = len(face["entries"])
+        count = sum(1 for e in face["entries"] if e["kind"] == "ir")
+        colour = len(face["entries"]) - count
+        pictures = f"{count} picture{'s' if count != 1 else ''}"
+        if colour:
+            pictures += f" + {colour} colour"
+        elif common.get(self.config, "backlight.enabled") is True:
+            pictures += " · no colour pictures yet: Improve to add them"
         row = Adw.ActionRow(title=GLib.markup_escape_text(label),
-                            subtitle=f"{count} picture{'s' if count != 1 else ''} · added {self._when(face['created'])}")
+                            subtitle=f"{pictures} · added {self._when(face['created'])}")
         row.add_prefix(Gtk.Image(icon_name="avatar-default-symbolic"))
         improve = Gtk.Button(label="Improve", valign=Gtk.Align.CENTER,
                              tooltip_text="Improve recognition: add more pictures of this face")
@@ -947,6 +957,8 @@ class LinuxHelloCameraWindow(Adw.ApplicationWindow):
             heading, running = f"Improve “{label}”", f"Improving “{label}”"
             body = ("Look straight into the camera. It takes 5 more pictures of this face. It helps "
                     "most in the conditions where unlocking fails, such as other lighting or an angle.")
+        if common.get(self.config, "backlight.enabled") is True:
+            body += " The colour camera takes pictures too, for unlocking when backlit."
         dialog = Adw.AlertDialog(heading=heading, body=body)
         if face is None:
             box, entry = self._name_entry()
@@ -1078,9 +1090,19 @@ class LinuxHelloCameraWindow(Adw.ApplicationWindow):
         self.apply_banner.set_revealed(True)
 
     def _on_apply_settings(self, _banner):
-        if self.pending:
-            self.run_helper(["set"] + [f"{k}={v}" for k, v in self.pending.items()],
-                            success="Settings saved")
+        if not self.pending:
+            return
+        changes = dict(self.pending)
+        if changes.get("backlight.enabled") == "true" and not common.get(self.config, "backlight.camera"):
+            # The colour camera is found here, where the camera list is
+            colour = common.pick_colour_camera(
+                common.get(self.config, "camera") or "",
+                [(path, is_ir) for path, _title, _sub, is_ir in list_cameras()])
+            if colour is None:
+                self.toast("No colour camera found for the backlight check")
+                return
+            changes["backlight.camera"] = colour
+        self.run_helper(["set"] + [f"{k}={v}" for k, v in changes.items()], success="Settings saved")
 
     # ------------------------------------------------ camera page callbacks
 

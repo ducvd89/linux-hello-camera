@@ -29,11 +29,12 @@ int main(int argc, char** argv) {
   lhc_test::FakeCrypto crypto;
   return lhc::runDaemon(
       options, crypto,
-      [](const std::string& device, std::string& error) -> std::unique_ptr<lhc::FrameSource> {
+      [](const std::string& device, bool colour,
+         std::string& error) -> std::unique_ptr<lhc::FrameSource> {
         struct stat st;
         if (stat(device.c_str(), &st) == 0 && S_ISDIR(st.st_mode)) {
           return lhc::ReplaySource::open(device, error);
         }
-        return lhc::V4l2Camera::open(device, error);
+        return lhc::V4l2Camera::open(device, error, colour);
       });
 }

@@ -15,6 +15,8 @@ struct ClientContext {
   std::string socket_path = kSocketPath;
   std::string config_path = kDefaultConfigPath;
   std::string confirm_hook = kConfirmHook;
+  std::string settings_helper = kSettingsHelper;
+  std::string proc_root = "/proc";
 };
 
 enum class CallStatus {

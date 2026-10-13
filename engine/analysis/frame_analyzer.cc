@@ -7,6 +7,11 @@ namespace {
 // Enough to find a partner within kMaxPairGapUs at any plausible frame rate.
 constexpr size_t kHistoryFrames = 8;
 
+// Detection tries the lit frame as captured and, failing that, brightened copies (a face in front
+// of a bright window comes out nearly black). Liveness still measures the frames as captured, so
+// brightening never makes a photo look more alive. 1 means as captured.
+constexpr float kGammas[] = {1.0f, 0.5f, 0.35f};
+
 }  // namespace
 
 void FrameAnalyzer::push(Frame frame, std::vector<Observation>& out) {
@@ -48,7 +53,23 @@ void FrameAnalyzer::analyseIfReady(size_t index, std::vector<Observation>& out) 
   obs.timestamp_us = entry.frame.timestamp_us;
   obs.lit_mean = entry.mean;
 
-  const std::vector<Detection> faces = detector_.inference(toRgb(entry.frame.image));
+  // The level that found the face last time goes first: each extra pass costs about a frame's
+  // time, and falling behind the camera drops frames and breaks the lit/unlit rhythm.
+  std::vector<float> order = {gamma_};
+  for (float gamma : kGammas) {
+    if (gamma != gamma_) {
+      order.push_back(gamma);
+    }
+  }
+  std::vector<Detection> faces;
+  for (float gamma : order) {
+    faces = detector_.inference(
+        toRgb(gamma == 1.0f ? entry.frame.image : brighten(entry.frame.image, gamma)));
+    if (!faces.empty()) {
+      obs.boost_gamma = gamma_ = gamma;
+      break;
+    }
+  }
   if (!faces.empty()) {
     const Detection& face = faces.front();  // largest
     obs.face_found = true;
@@ -72,6 +93,7 @@ void FrameAnalyzer::analyseIfReady(size_t index, std::vector<Observation>& out) 
       obs.unlit_seq = unlit.seq;
       obs.pair_gap_us = unlit.timestamp_us - entry.frame.timestamp_us;
       obs.gain = measureGain(entry.frame.image, unlit.image, face.box);
+      obs.glints = measureGlints(entry.frame.image, unlit.image, eyeRegions(face.box, face.landmarks));
     }
     obs.specular = countSpecular(entry.frame.image, eyeRegions(face.box, face.landmarks));
   }

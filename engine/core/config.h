@@ -14,6 +14,7 @@ extern const char* const kFacesRoot;  // /var/lib/linux-hello-camera/faces (0.8 
 extern const char* const kTemplatesDir;  // /var/lib/linux-hello-camera/templates
 extern const char* const kSocketPath;    // /run/linux-hello-camera/engine.sock
 extern const char* const kConfirmHook;   // /usr/lib/linux-hello-camera/confirm-hook
+extern const char* const kSettingsHelper;  // /usr/lib/linux-hello-camera/settings-helper
 
 inline constexpr const char* kModelsEnvVar = "LHC_MODELS_DIR";
 
@@ -56,6 +57,13 @@ struct Config {
     std::string model = "minifas_v2.onnx";
     float threshold = 0.8f;
   } ai_antispoof;
+
+  // When the IR camera sees the face too dark (a bright window behind it), confirm it with the
+  // colour camera as well (DESIGN.md "Backlight fallback").
+  struct Backlight {
+    bool enabled = false;
+    std::string camera;  // the colour camera next to the IR one
+  } backlight;
 
   struct Confirm {
     bool enabled = true;

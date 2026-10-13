@@ -64,8 +64,11 @@ storage:
                                 # behaves like off (and the app greys the toggle out).
 ai_antispoof:
   enabled: false
-  model: minifas_v2.onnx
+  model: minifas_v2.onnx        # also the colour camera's anti-spoofing model (backlight)
   threshold: 0.8
+backlight:                      # a bright window behind you: confirm the face with the colour camera too
+  enabled: false
+  camera: ''                    # the colour camera next to the IR one (the app sets it)
 confirm:
   enabled: true                 # ask before approving these services after a match
   services: [sudo, polkit-1]
@@ -78,12 +81,13 @@ starting values, to be calibrated on real recordings (see `probe`).
 ## Face templates
 
 Decrypted content (JSON): `{"version": 1, "model": "<recognition model file>", "dim": 512,
-"entries": [{"id": "<unix-ms>", "created": <unix-s>, "face": "<face id>", "embedding": "<base64 little-endian float32>"}],
+"entries": [{"id": "<unix-ms>", "created": <unix-s>, "face": "<face id>", "kind": "ir" | "colour", "embedding": "<base64 little-endian float32>"}],
 "names": {"<face id>": "<name>"}}`.
 Each enrolled picture is one entry. Pictures are grouped into faces (a person, or one look of a
 person); a face's id is the id of its first picture, and the user can name it (1 to 128 bytes of
 UTF-8, no control characters). Entries saved before faces existed have no `face` and all join the
-face of the first of them. A template made with a different recognition model than the
+face of the first of them. `kind` is the camera that took the picture (missing = `ir`); IR and
+colour pictures are only ever compared with pictures of their own kind. A template made with a different recognition model than the
 configured one, or one that can't be decrypted (TPM cleared, host secret changed), counts as
 **needs re-enrolment**: auth returns ignore (password works), `list` reports it, the app asks the
 user to add their face again. Embeddings can't be turned back into a photo of the face.
@@ -112,8 +116,8 @@ newline-delimited JSON. The daemon reads the peer's uid/pid with SO_PEERCRED.
 |---|---|---|
 | `{"cmd":"auth","username":U,"service":S,"remote":bool}` | root, or the uid of U itself (the KDE lock screen asks as the user) | `{"result": ...}` with the same values as `test`, plus `"ignore"` |
 | `{"cmd":"test","username":U}` | root | `{"result":..., "best_score":..., "liveness_pairs":..., "elapsed_ms":..., ...}` |
-| `{"cmd":"enroll","username":U,"count":5[,"name":NAME \| "face":F]}` | root | `{"progress":i,"total":N}` lines, then `{"result":"ok","added":n,"face":F}` or `{"result":"error","detail":...}`; always appends: a new face (named NAME), or more pictures of face F |
-| `{"cmd":"list","username":U}` | root, or the uid of U | `{"result":"ok","entries":[{"id","created","face"}],"names":{F:NAME},"encryption":"tpm-sb"\|"tpm"\|"none","model":...}` or `{"result":"not_enrolled"}` / `{"result":"needs_reenrol","detail":...}` (never embeddings) |
+| `{"cmd":"enroll","username":U,"count":5[,"name":NAME \| "face":F]}` | root | `{"progress":i,"total":N}` lines, then `{"result":"ok","added":n,"colour_added":m,"face":F}` or `{"result":"error","detail":...}`; always appends: a new face (named NAME), or more pictures of face F. With `backlight.enabled` the colour camera takes `count` pictures alongside (N = 2 × count); more pictures of an existing face may be colour only when the IR ones can't pass the strobe check |
+| `{"cmd":"list","username":U}` | root, or the uid of U | `{"result":"ok","entries":[{"id","created","face","kind"}],"names":{F:NAME},"encryption":"tpm-sb"\|"tpm"\|"none","model":...}` or `{"result":"not_enrolled"}` / `{"result":"needs_reenrol","detail":...}` (never embeddings) |
 | `{"cmd":"remove","username":U,"id":ID}` (one picture) or `{...,"face":F}` (a whole face) / `{"cmd":"rename","username":U,"face":F,"name":NAME}` / `{"cmd":"clear","username":U}` | root | `{"result":"ok"}` |
 | `{"cmd":"migrate"}` | root | `{"result":"ok","migrated":[users],"failed":[{"username","detail"}]}`; crops of a user that can't be embedded are kept and listed in `failed` |
 | `{"cmd":"set-encryption","value":"on"\|"off"\|"auto"}` | root | writes `storage.tpm_encryption`, converts all templates, `{"result":"ok","effective":"tpm-sb"\|"tpm"\|"none","converted":n}`; `"on"` without a TPM 2.0 → `{"result":"error","detail":"no TPM 2.0"}` |
@@ -131,7 +135,7 @@ polkit's protocol channel. It logs to syslog (`LOG_AUTHPRIV`, ident `linux-hello
 
 | Command | Run by | Output | Exit |
 |---|---|---|---|
-| `auth --username U [--service S]` | PAM module (as root for sudo/polkit/SDDM, as the user for the KDE lock screen) | nothing | 0 match, 1 no match, 2 ignore (disabled, not enrolled, ignored service, lid closed, remote (SSH) session, no camera) |
+| `auth --username U [--service S]` | PAM module (as root for sudo/polkit/SDDM, as the user for the KDE lock screen) | nothing | 0 match, 1 no match, 2 ignore (disabled, not enrolled, ignored service, lid closed, remote (SSH) session, no camera, the app asking for admin rights) |
 | `test --username U` | app's root helper | one JSON line: `{"result": "ok"\|"not_recognised"\|"no_face"\|"liveness_failed"\|"not_enrolled"\|"needs_reenrol"\|"camera_unavailable"\|"too_dark"\|"busy"\|"error", "best_score": f, "liveness_pairs": n, "elapsed_ms": n}` | 0 if ok else 1 |
 | `enroll --username U [--count 5] [--name NAME \| --face F]` | app's root helper (root) | progress lines `PROGRESS i N`, then `OK n` or `ERR <reason>`. Adds to the user's existing template: a new face, or more pictures of face F | 0 ok |
 | `list --username U` | the app (as the user) or its root helper | the daemon's `list` reply as one JSON line | 0 |
@@ -142,18 +146,50 @@ polkit's protocol channel. It logs to syslog (`LOG_AUTHPRIV`, ident `linux-hello
 
 `auth`, `test`, `enroll`, `list`, `remove`, `rename`, `clear` and `migrate` send the request to the daemon
 (socket activation starts it). The helper keeps the checks that need the PAM caller's context
-(remote session, ignored service, lid) and the confirm hook; the daemon does the rest. If the
+(remote session, ignored service, lid, the app's own admin requests) and the confirm hook; the
+daemon does the rest. For `polkit-1`, `auth` returns ignore while a `pkexec
+/usr/lib/linux-hello-camera/settings-helper` process is waiting (pkexec replaces itself with the
+helper once authorised, so only a pending request matches): changing face unlock itself always
+takes the password, so a face that fooled the camera can't add another face or turn checks off. If the
 daemon can't be reached, `auth` returns ignore.
 
 Face check flow (in the daemon): read config; return ignore for ignore cases; open the camera (V4L2, mmap); read frames
 until `timeout_ms`; skip uniform frames (min == max: this camera stops streaming after ~8 s,
-reopen); classify lit/unlit by mean brightness; on lit frames detect the largest face, embed it,
+reopen); classify lit/unlit by mean brightness against the neighbouring frames (a swing of 1 grey
+level is enough; the gain and glint checks decide liveness); on lit frames detect the largest face
+(on the frame as captured, else on brightened copies, starting with the level that worked last), embed it,
 compare with the user's decrypted template (cosine); pair each lit frame with the neighbouring unlit
 frame for liveness; succeed when `frames_needed` of the last 3 lit frames match and
 `ir_liveness.min_pairs` pairs pass (and AI anti-spoof passes if enabled). Then, if
 `confirm.enabled` and the service is in `confirm.services`, run
 `/usr/lib/linux-hello-camera/confirm-hook --user U --service S --pam-pid <helper's parent pid>`
 and succeed only if it exits 0.
+
+### Backlight fallback
+
+With a bright window behind the user the IR camera exposes for the window (its exposure can't be
+set from Linux): the face comes out nearly black and the emitter brightens it by 4 to 10 grey levels
+instead of the 25 `min_face_gain` asks. The colour camera, which picks its own exposure, still sees
+the face well, but colour pictures don't match IR ones (cosine about 0.4), so faces get colour
+pictures of their own (`kind: colour`, taken alongside the IR ones while `backlight.enabled`).
+
+When `backlight.enabled`, `backlight.camera` is set and the user has colour pictures, the IR check
+gives up after 8 lit frames in which nothing matched and no face brightened by `min_face_gain`, and
+the daemon opens the colour camera too (its light turns on) for a fresh `timeout_ms`. A face then
+counts only when, at about the same moment (0.5 s) and place (centres within 0.15 of the frame):
+
+- the colour camera sees it, it matches the colour pictures (`recognition.threshold`) and
+  `ai_antispoof.model` calls it real (`ai_antispoof.threshold`), in `frames_needed` of the last 3
+  colour looks; and
+- the IR camera sees it (brightened for detection; measured as captured) with both eyes glinting in
+  the lit frame (a pixel ≥ 100) and not in the unlit one (< 64), the face brightening by ≥ 3 and the
+  ratio ≥ `min_gain_ratio`, in `max(1, min_pairs)` of the last 3 lit frames.
+
+A phone or monitor is black to the IR camera; a matte print has no glints and fails the
+anti-spoofing model. A glossy print with real glasses on it is the weak spot, which is why the
+fallback is off by default. The two cameras take turns (IR analysis on one frame, colour on the
+next) so neither falls behind and drops frames. `test` replies carry `"backlight": true` and the log
+line `backlight=1` when the fallback decided.
 
 `/run/linux-hello-camera/` holds `engine.sock` and must be reachable by every user (the KDE lock
 screen asks as the user). The confirm broker's sockets live in `/run/linux-hello-camera/confirm/`

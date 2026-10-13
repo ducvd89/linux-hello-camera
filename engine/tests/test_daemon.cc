@@ -8,6 +8,7 @@
 #include <mutex>
 #include <thread>
 
+#include "cli/auth_command.h"
 #include "cli/daemon_client.h"
 #include "daemon/authorization.h"
 #include "daemon/engine.h"
@@ -120,6 +121,33 @@ void testProtocol() {
   }
   CHECK(toLine(json{{"a", 1}}) == "{\"a\":1}\n");
   CHECK(errorReply("x") == (json{{"result", "error"}, {"detail", "x"}}));
+}
+
+void testAppAdminRequest() {
+  const std::string helper = "/usr/lib/linux-hello-camera/settings-helper";
+  auto cmdline = [](std::initializer_list<std::string> args) {
+    std::string s;
+    for (const std::string& a : args) {
+      s += a + std::string(1, '\0');
+    }
+    return s;
+  };
+  TempDir proc;
+  proc.write("1/cmdline", cmdline({"/sbin/init"}));
+  proc.write("self/cmdline", cmdline({"pkexec", helper}));  // not a pid: never looked at
+  proc.write("200/cmdline", cmdline({"pkexec", "/usr/bin/gparted"}));  // another app's request
+  proc.write("201/cmdline", cmdline({"/usr/bin/python3", "-I", helper, "enroll"}));  // authorised
+  proc.write("202/cmdline", "");                                                     // a zombie
+  CHECK(!appAdminRequestPending(proc.path(), helper));
+
+  // The app's pkexec waiting for the admin prompt, with or without options before the program.
+  proc.write("300/cmdline", cmdline({"pkexec", helper, "set", "disabled=true"}));
+  CHECK(appAdminRequestPending(proc.path(), helper));
+  TempDir proc2;
+  proc2.write("301/cmdline", cmdline({"/usr/bin/pkexec", "--disable-internal-agent", helper}));
+  CHECK(appAdminRequestPending(proc2.path(), helper));
+
+  CHECK(!appAdminRequestPending(proc.path() + "/missing", helper));
 }
 
 void testAuthorization() {
@@ -241,7 +269,7 @@ struct EngineFixture {
   TempDir hw;
   FakeCrypto crypto;
   TemplateStore store;
-  std::function<std::unique_ptr<FrameSource>(const std::string&, std::string&)> opener;
+  std::function<std::unique_ptr<FrameSource>(const std::string&, bool, std::string&)> opener;
   std::unique_ptr<Engine> engine;
 
   EngineFixture(bool tpm2, bool secure_boot, const std::string& config_body,
@@ -249,7 +277,7 @@ struct EngineFixture {
       : store(dir.file("templates"), crypto) {
     lhc_test::fakeHardware(hw, tpm2, secure_boot);
     dir.write("config.yaml", config_body);
-    opener = [](const std::string&, std::string& error) -> std::unique_ptr<FrameSource> {
+    opener = [](const std::string&, bool, std::string& error) -> std::unique_ptr<FrameSource> {
       error = "no camera in this test";
       return nullptr;
     };
@@ -260,7 +288,8 @@ struct EngineFixture {
     options.hardware_root = hw.path();
     options.busy_wait = busy_wait;
     engine = std::make_unique<Engine>(
-        options, store, [this](const std::string& d, std::string& e) { return opener(d, e); });
+        options, store,
+        [this](const std::string& d, bool c, std::string& e) { return opener(d, c, e); });
   }
 
   json call(const std::string& line) {
@@ -418,7 +447,7 @@ void testEngineListRemoveClear() {
         r["model"] == "edgeface_s_gamma_05.onnx");
   // Pictures saved before faces existed all belong to one face, named after the first.
   CHECK(r["entries"].size() == 2 &&
-        r["entries"][0] == (json{{"id", "1000"}, {"created", 5}, {"face", "1000"}}) &&
+        r["entries"][0] == (json{{"id", "1000"}, {"created", 5}, {"face", "1000"}, {"kind", "ir"}}) &&
         r["entries"][1]["face"] == "1000" && r["names"] == json::object());
   // Never embeddings.
   CHECK(r.dump().find("embedding") == std::string::npos);
@@ -525,7 +554,7 @@ void testEngineBusy() {
   std::mutex m;
   std::condition_variable cv;
   bool entered = false, release = false;
-  f.opener = [&](const std::string&, std::string& error) -> std::unique_ptr<FrameSource> {
+  f.opener = [&](const std::string&, bool, std::string& error) -> std::unique_ptr<FrameSource> {
     std::unique_lock<std::mutex> lock(m);
     entered = true;
     cv.notify_all();
@@ -663,6 +692,7 @@ void testServerIdleExit() {
 void testDaemon() {
   testProtocol();
   testAuthorization();
+  testAppAdminRequest();
   testRateLimiter();
   testSessionGate();
   testSocketActivation();

@@ -55,8 +55,10 @@ V4l2Camera::~V4l2Camera() {
   }
 }
 
-std::unique_ptr<V4l2Camera> V4l2Camera::open(const std::string& path, std::string& error) {
+std::unique_ptr<V4l2Camera> V4l2Camera::open(const std::string& path, std::string& error,
+                                             bool colour) {
   std::unique_ptr<V4l2Camera> camera(new V4l2Camera());
+  camera->colour_ = colour;
   if (!camera->init(path, error)) {
     return nullptr;
   }
@@ -93,12 +95,16 @@ bool V4l2Camera::chooseFormat(std::string& error) {
   }
 
   // GREY is what the IR sensor in this project's target laptops offers; the
-  // others cover cameras that only expose a colour-style stream.
-  for (uint32_t wanted : {V4L2_PIX_FMT_GREY, V4L2_PIX_FMT_YUYV, V4L2_PIX_FMT_MJPEG}) {
+  // others cover cameras that only expose a colour-style stream. A colour camera
+  // gets a fixed, modest size, compressed: it streams next to the IR camera.
+  const std::vector<uint32_t> order =
+      colour_ ? std::vector<uint32_t>{V4L2_PIX_FMT_MJPEG, V4L2_PIX_FMT_YUYV}
+              : std::vector<uint32_t>{V4L2_PIX_FMT_GREY, V4L2_PIX_FMT_YUYV, V4L2_PIX_FMT_MJPEG};
+  for (uint32_t wanted : order) {
     v4l2_format fmt{};
     fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-    fmt.fmt.pix.width = current.fmt.pix.width;
-    fmt.fmt.pix.height = current.fmt.pix.height;
+    fmt.fmt.pix.width = colour_ ? kColourWidth : current.fmt.pix.width;
+    fmt.fmt.pix.height = colour_ ? kColourHeight : current.fmt.pix.height;
     fmt.fmt.pix.pixelformat = wanted;
     fmt.fmt.pix.field = V4L2_FIELD_ANY;
     const int rc = xioctl(fd_, VIDIOC_S_FMT, &fmt);
@@ -114,7 +120,7 @@ bool V4l2Camera::chooseFormat(std::string& error) {
       return true;
     }
   }
-  error = "camera offers none of GREY, YUYV, MJPEG";
+  error = colour_ ? "camera offers neither MJPEG nor YUYV" : "camera offers none of GREY, YUYV, MJPEG";
   return false;
 }
 
@@ -215,6 +221,51 @@ bool V4l2Camera::convert(const Buffer& buffer, size_t bytes_used, GreyImage& out
   }
 }
 
+bool V4l2Camera::convertColour(const Buffer& buffer, size_t bytes_used, Frame& out) {
+  const auto* src = static_cast<const uint8_t*>(buffer.start);
+  bytes_used = std::min(bytes_used, buffer.length);
+  if (pixel_format_ == V4L2_PIX_FMT_MJPEG) {
+    int jw = 0, jh = 0, subsamp = 0, colorspace = 0;
+    auto* jpeg = const_cast<unsigned char*>(src);
+    if (tjDecompressHeader3(tj_, jpeg, static_cast<unsigned long>(bytes_used), &jw, &jh, &subsamp,
+                            &colorspace) != 0 ||
+        jw <= 0 || jh <= 0) {
+      return false;
+    }
+    out.colour = ImageRGB(jw, jh);
+    if (tjDecompress2(tj_, jpeg, static_cast<unsigned long>(bytes_used), out.colour.ptr(), jw, 0,
+                      jh, TJPF_RGB, TJFLAG_FASTDCT) != 0) {
+      return false;
+    }
+  } else {  // YUYV, BT.601
+    const size_t w = static_cast<size_t>(width_);
+    const size_t h = static_cast<size_t>(height_);
+    const size_t stride = std::max(stride_, w * 2);
+    if (bytes_used < stride * (h - 1) + w * 2) {
+      return false;
+    }
+    out.colour = ImageRGB(width_, height_);
+    auto clamp = [](int v) { return static_cast<uint8_t>(std::clamp(v, 0, 255)); };
+    for (size_t y = 0; y < h; ++y) {
+      const uint8_t* row = src + y * stride;
+      for (size_t x = 0; x < w; ++x) {
+        const uint8_t* pair = row + (x & ~size_t{1}) * 2;
+        const int c = row[x * 2] - 16, d = pair[1] - 128, e = pair[3] - 128;
+        uint8_t* px = &out.colour.data[(y * w + x) * 3];
+        px[0] = clamp((298 * c + 409 * e + 128) >> 8);
+        px[1] = clamp((298 * c - 100 * d - 208 * e + 128) >> 8);
+        px[2] = clamp((298 * c + 516 * d + 128) >> 8);
+      }
+    }
+  }
+  out.image = GreyImage(out.colour.width, out.colour.height);
+  for (size_t i = 0; i < out.image.data.size(); ++i) {
+    const uint8_t* px = &out.colour.data[i * 3];
+    out.image.data[i] = static_cast<uint8_t>((77 * px[0] + 150 * px[1] + 29 * px[2]) >> 8);
+  }
+  return true;
+}
+
 ReadStatus V4l2Camera::read(Frame& out, int timeout_ms) {
   const auto deadline =
       std::chrono::steady_clock::now() + std::chrono::milliseconds(std::max(0, timeout_ms));
@@ -254,7 +305,9 @@ ReadStatus V4l2Camera::read(Frame& out, int timeout_ms) {
     }
 
     const bool damaged = (buf.flags & V4L2_BUF_FLAG_ERROR) != 0;
-    const bool converted = !damaged && convert(buffers_[buf.index], buf.bytesused, out.image);
+    const bool converted =
+        !damaged && (colour_ ? convertColour(buffers_[buf.index], buf.bytesused, out)
+                             : convert(buffers_[buf.index], buf.bytesused, out.image));
     // Hand the buffer straight back so the driver never runs out.
     if (xioctl(fd_, VIDIOC_QBUF, &buf) < 0) {
       return ReadStatus::kError;

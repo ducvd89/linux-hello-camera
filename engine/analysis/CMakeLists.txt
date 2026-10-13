@@ -1,5 +1,6 @@
 add_library(lhc_analysis STATIC
     authenticator.cc
+    backlight.cc
     crop_selector.cc
     frame_analyzer.cc
     match_tracker.cc

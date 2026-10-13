@@ -1,3 +1,4 @@
+#include "analysis/backlight.h"
 #include "analysis/crop_selector.h"
 #include "analysis/match_tracker.h"
 #include "face/recognition/face_recognition.h"
@@ -96,8 +97,56 @@ void testCropSelector() {
 
 }  // namespace
 
+void testBacklightTracker() {
+  // Colour and IR see the same face at nearly the same place (as measured on the target laptop).
+  auto colour = [](int64_t t, bool good) { return Sighting{t, good, 0.56f, 0.73f}; };
+  auto ir = [](int64_t t, bool good) { return Sighting{t, good, 0.52f, 0.73f}; };
+
+  BacklightTracker t(2, 2);
+  t.addColour(colour(0, true));
+  t.addIr(ir(10000, true));
+  CHECK(!t.satisfied());  // one of each is not enough
+  t.addColour(colour(67000, true));
+  CHECK(!t.satisfied());
+  t.addIr(ir(134000, true));
+  CHECK(t.satisfied());
+
+  // Good on both, but never at the same moment: no.
+  BacklightTracker apart(1, 1);
+  apart.addColour(colour(0, true));
+  apart.addIr(ir(kMaxSightingGapUs + 1, true));
+  CHECK(!apart.satisfied());
+
+  // Same moment, different place: the cameras look at different things (a photo beside a face).
+  BacklightTracker elsewhere(1, 1);
+  elsewhere.addColour(colour(0, true));
+  elsewhere.addIr(Sighting{0, true, 0.56f + kMaxCentreOffset + 0.01f, 0.73f});
+  CHECK(!elsewhere.satisfied());
+
+  // Only good looks count, and only recent ones (the last 3 of each).
+  BacklightTracker stale(2, 1);
+  stale.addIr(ir(0, true));
+  stale.addColour(colour(0, true));
+  for (int i = 1; i <= 3; ++i) {
+    stale.addColour(colour(i * 67000, false));
+  }
+  stale.addColour(colour(4 * 67000, true));
+  CHECK(!stale.satisfied());
+  stale.addColour(colour(5 * 67000, true));
+  stale.addIr(ir(5 * 67000, true));
+  CHECK(stale.satisfied());
+
+  // Needs of zero still ask for one look of each.
+  BacklightTracker none(0, 0);
+  none.addColour(colour(0, true));
+  CHECK(!none.satisfied());
+  none.addIr(ir(0, true));
+  CHECK(none.satisfied());
+}
+
 void testMatching() {
   testCosine();
   testTracker();
   testCropSelector();
+  testBacklightTracker();
 }

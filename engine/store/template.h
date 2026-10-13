@@ -7,11 +7,16 @@
 
 namespace lhc {
 
+// TemplateEntry::kind. IR and colour pictures of a face never match each other.
+inline constexpr const char* kIrKind = "ir";
+inline constexpr const char* kColourKind = "colour";
+
 struct TemplateEntry {
   std::string id;       // unix milliseconds of the capture
   int64_t created = 0;  // unix seconds
   std::vector<float> embedding;
   std::string face;     // the face (person, look) this picture belongs to: the id of its first entry
+  std::string kind = kIrKind;  // which camera took it: kIrKind or kColourKind
 
 };
 

@@ -5,11 +5,13 @@
 #include <vector>
 
 #include "core/grey_image.h"
+#include "face/image_utils.h"
 
 namespace lhc {
 
 struct Frame {
-  GreyImage image;
+  GreyImage image;           // luma; what liveness and the IR path look at
+  ImageRGB colour;           // colour cameras opened for colour only; empty otherwise
   int64_t timestamp_us = 0;  // kernel capture time (CLOCK_MONOTONIC), microseconds
   uint32_t seq = 0;          // frame counter, assigned by CameraStream (UVC reports 0 here)
 };
@@ -26,8 +28,11 @@ double meanBrightness(const GreyImage& image);
 
 inline bool isLit(double mean) { return mean >= kLitMeanMin; }
 
-// Smallest brightness swing between nearby frames that counts as the emitter strobing.
-inline constexpr double kMinStrobeContrast = 8.0;
+// Smallest brightness swing between nearby frames that counts as the emitter strobing. With a
+// bright window filling much of the picture the whole-frame swing is only 1 to 3 grey levels.
+// Getting this wrong only pairs the wrong frames: whether a face is real is decided afterwards
+// (measureGain, measureGlints), and a mispaired photo fails those like any other.
+inline constexpr double kMinStrobeContrast = 1.0;
 
 // How many frames either side a frame is compared with by classifyLit.
 inline constexpr size_t kLitWindowRadius = 2;
@@ -37,6 +42,10 @@ inline constexpr size_t kLitWindowRadius = 2;
 // kLitWindowRadius: lit when brighter than the midpoint of their range. Where the neighbourhood
 // does not swing by kMinStrobeContrast (emitter not strobing), falls back to isLit.
 std::vector<bool> classifyLit(const std::vector<double>& means);
+
+// `image` with every level raised to the power `gamma` (on a 0..1 scale): below 1 brightens the
+// dark end most, which is where a backlit face sits.
+GreyImage brighten(const GreyImage& image, float gamma);
 
 // A frame as the pairing logic sees it.
 struct FrameStamp {

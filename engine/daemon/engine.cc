@@ -7,9 +7,11 @@
 #include <exception>
 
 #include "analysis/authenticator.h"
+#include "analysis/backlight.h"
 #include "analysis/crop_selector.h"
 #include "analysis/frame_analyzer.h"
 #include "camera/camera_stream.h"
+#include "camera/frame_grabber.h"
 #include "core/config.h"
 #include "core/hardware.h"
 #include "store/migrate.h"
@@ -24,6 +26,9 @@ using nlohmann::json;
 // Enrolling gives up this long after the camera session starts.
 constexpr int kEnrollTimeoutMs = 20000;
 
+// Once one camera's pictures are taken, enrolling waits at most this much longer for the other's.
+constexpr int kColourEnrollGraceMs = 4000;
+
 int64_t unixMs() {
   return std::chrono::duration_cast<std::chrono::milliseconds>(
              std::chrono::system_clock::now().time_since_epoch())
@@ -36,8 +41,10 @@ bool countsAsFailedAttempt(Verdict verdict) {
   return verdict == Verdict::kNotRecognised || verdict == Verdict::kLivenessFailed;
 }
 
-CameraStream cameraStream(const CameraOpener& opener, const std::string& device) {
-  return CameraStream([opener, device](std::string& error) { return opener(device, error); });
+CameraStream cameraStream(const CameraOpener& opener, const std::string& device,
+                          bool colour = false) {
+  return CameraStream(
+      [opener, device, colour](std::string& error) { return opener(device, colour, error); });
 }
 
 json reportReply(const AuthReport& r, const char* result) {
@@ -47,6 +54,9 @@ json reportReply(const AuthReport& r, const char* result) {
                 {"elapsed_ms", r.elapsed_ms},
                 {"face_gain_median", r.face_gain_median},
                 {"ratio_median", r.ratio_median}};
+  if (r.used_colour) {
+    reply["backlight"] = true;
+  }
   if (!r.detail.empty()) {
     reply["detail"] = r.detail;
   }
@@ -126,9 +136,10 @@ bool Engine::ensureModels(const Config& config, std::string& error) {
   const std::string key =
       config.detection.model + "|" + std::to_string(config.detection.threshold) + "|" +
       config.recognition.model + "|" +
-      (config.ai_antispoof.enabled
+      (config.ai_antispoof.enabled || config.backlight.enabled
            ? config.ai_antispoof.model + "|" + std::to_string(config.ai_antispoof.threshold)
-           : "");
+           : "") +
+      "|" + (config.ai_antispoof.enabled ? "ir" : "") + (config.backlight.enabled ? "colour" : "");
   if (models_.detector && key == models_key_) {
     return true;
   }
@@ -177,7 +188,7 @@ json Engine::verify(const Request& request, bool is_auth) {
     return refuse("camera_unavailable", "no camera configured");
   }
 
-  std::vector<std::vector<float>> enrolled;
+  std::vector<std::vector<float>> enrolled, colour_enrolled;
   {
     std::lock_guard<std::mutex> lock(store_mutex_);
     const Storage target = effectiveStorage(config);
@@ -190,12 +201,14 @@ json Engine::verify(const Request& request, bool is_auth) {
       return refuse("needs_reenrol", "needs re-enrolment: " + loaded.detail);
     }
     for (const TemplateEntry& e : loaded.tmpl.entries) {
-      enrolled.push_back(e.embedding);
+      (e.kind == kColourKind ? colour_enrolled : enrolled).push_back(e.embedding);
     }
   }
   if (enrolled.empty()) {
-    return refuse("not_enrolled", "template has no entries");
+    return refuse("not_enrolled", "template has no IR pictures");
   }
+  const bool backlight = config.backlight.enabled && !config.backlight.camera.empty() &&
+                         !colour_enrolled.empty();
 
   SessionGate::Lock session = gate_.acquire(options_.busy_wait);
   if (!session) {
@@ -212,8 +225,19 @@ json Engine::verify(const Request& request, bool is_auth) {
     return refuse("error", error);
   }
 
-  const AuthReport report = runAuth(config, camera, models_, enrolled, start,
-                                    start + std::chrono::milliseconds(config.timeout_ms));
+  AuthReport report = runAuth(config, camera, models_, enrolled, start,
+                              start + std::chrono::milliseconds(config.timeout_ms), backlight);
+  if (report.backlit) {
+    // Too dark for the IR checks: confirm with the colour camera too, with a fresh timeout.
+    CameraStream colour = cameraStream(open_camera_, config.backlight.camera, true);
+    if (colour.open(error)) {
+      report = runBacklightAuth(config, camera, colour, models_, colour_enrolled, start,
+                                Clock::now() + std::chrono::milliseconds(config.timeout_ms));
+      colour.close();
+    } else {
+      spdlog::warn("backlight fallback skipped: colour camera: {}", error);
+    }
+  }
   camera.close();
 
   if (is_auth) {
@@ -223,9 +247,9 @@ json Engine::verify(const Request& request, bool is_auth) {
       limiter_.recordFailure(user, Clock::now());
     }
   }
-  spdlog::info("user={} service={} result={} best_score={:.3f} pairs={} elapsed_ms={}", user,
+  spdlog::info("user={} service={} result={} best_score={:.3f} pairs={} elapsed_ms={}{}", user,
                service, verdictName(report.verdict), report.best_score, report.liveness_pairs,
-               report.elapsed_ms);
+               report.elapsed_ms, report.used_colour ? " backlight=1" : "");
 
   const bool not_face_related =
       report.verdict == Verdict::kCameraUnavailable || report.verdict == Verdict::kError;
@@ -267,11 +291,48 @@ json Engine::enroll(const Request& request, const Emit& emit) {
   CropSelector selector(params);
   FrameAnalyzer analyzer(*models_.detector, models_.recognizer.get());
 
+  // With the backlight fallback on, the colour camera takes the same number of pictures alongside.
+  const bool with_colour = config.backlight.enabled && !config.backlight.camera.empty();
+  CameraStream colour = cameraStream(open_camera_, config.backlight.camera, true);
+  std::unique_ptr<FrameGrabber> grabber;
+  if (with_colour) {
+    if (!colour.open(error)) {
+      return errorReply("colour camera unavailable: " + error);
+    }
+    grabber = std::make_unique<FrameGrabber>(colour);
+  }
+  CropSelectorParams colour_params;
+  colour_params.require_liveness = false;  // the strobe is the IR camera's; nothing to pair here
+  CropSelector colour_selector(colour_params);
+  const int total = request.count * (with_colour ? 2 : 1);
+
   // Only embeddings are kept; the crop an observation carries never leaves memory.
   std::vector<TemplateEntry> added;
-  const auto deadline = start + std::chrono::milliseconds(kEnrollTimeoutMs);
+  int ir_added = 0, colour_added = 0;
+  int64_t last_id = 0;
+  auto add = [&](const std::vector<float>& embedding, const char* kind) {
+    TemplateEntry entry;
+    const int64_t now_ms = unixMs();
+    last_id = std::max(now_ms, last_id + 1);  // two cameras can take pictures in the same ms
+    entry.id = std::to_string(last_id);
+    entry.created = now_ms / 1000;
+    entry.embedding = embedding;
+    entry.kind = kind;
+    added.push_back(std::move(entry));
+    return emit(json{{"progress", added.size()}, {"total", total}});
+  };
+
+  auto deadline = start + std::chrono::milliseconds(kEnrollTimeoutMs);
+  bool grace = false;
   std::vector<Observation> observations;
-  while (static_cast<int>(added.size()) < request.count) {
+  while (ir_added < request.count || (with_colour && colour_added < request.count)) {
+    // Once one camera has its pictures, the other gets a little longer (only IR for a new face).
+    const bool one_done = ir_added >= request.count ||
+                          (!request.face.empty() && with_colour && colour_added >= request.count);
+    if (one_done && !grace) {
+      grace = true;
+      deadline = std::min(deadline, Clock::now() + std::chrono::milliseconds(kColourEnrollGraceMs));
+    }
     const auto left =
         std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now()).count();
     if (left <= 0) {
@@ -288,24 +349,52 @@ json Engine::enroll(const Request& request, const Emit& emit) {
     observations.clear();
     analyzer.push(std::move(frame), observations);
     for (const Observation& obs : observations) {
-      if (static_cast<int>(added.size()) >= request.count || !selector.accept(obs)) {
+      if (ir_added >= request.count || !selector.accept(obs)) {
         continue;
       }
-      TemplateEntry entry;
-      const int64_t now_ms = unixMs();
-      entry.id = std::to_string(now_ms);
-      entry.created = now_ms / 1000;
-      entry.embedding = obs.embedding;
-      added.push_back(std::move(entry));
-      if (!emit(json{{"progress", added.size()}, {"total", request.count}})) {
+      ++ir_added;
+      if (!add(obs.embedding, kIrKind)) {
         return errorReply("client went away");
       }
     }
+
+    Frame colour_frame;
+    if (grabber && colour_added < request.count && grabber->take(colour_frame) &&
+        !colour_frame.colour.empty()) {
+      const std::vector<Detection> faces = models_.detector->inference(colour_frame.colour);
+      if (!faces.empty()) {
+        Observation obs;
+        obs.timestamp_us = colour_frame.timestamp_us;
+        obs.face_found = true;
+        obs.det_score = faces.front().conf;
+        obs.embedding = models_.recognizer->embed(faces.front().image);
+        if (colour_selector.accept(obs)) {
+          ++colour_added;
+          if (!add(obs.embedding, kColourKind)) {
+            return errorReply("client went away");
+          }
+        }
+      }
+    }
   }
+  grabber.reset();
+  colour.close();
   camera.close();
 
-  if (static_cast<int>(added.size()) < request.count) {
+  // More pictures of an existing face may be colour only: in front of a bright window the IR
+  // pictures cannot pass the strobe check, and that is exactly when colour pictures are wanted.
+  const bool colour_only = !request.face.empty() && with_colour && colour_added >= request.count;
+  if (ir_added < request.count && !colour_only) {
     return errorReply("timeout");
+  }
+  if (colour_only && ir_added < request.count) {
+    added.erase(std::remove_if(added.begin(), added.end(),
+                               [](const TemplateEntry& e) { return e.kind == kIrKind; }),
+                added.end());
+    ir_added = 0;
+  }
+  if (with_colour && colour_added < request.count) {
+    spdlog::warn("user={} only {} of {} colour pictures taken", user, colour_added, request.count);
   }
 
   std::lock_guard<std::mutex> lock(store_mutex_);
@@ -340,9 +429,9 @@ json Engine::enroll(const Request& request, const Emit& emit) {
   if (!store_.save(user, tmpl, target, error)) {
     return errorReply("cannot save template: " + error);
   }
-  spdlog::info("user={} enrolled {} picture(s) for face {}, template has {}", user, request.count,
-               face, tmpl.entries.size());
-  return json{{"result", "ok"}, {"added", request.count}, {"face", face}};
+  spdlog::info("user={} enrolled {} IR and {} colour picture(s) for face {}, template has {}", user,
+               ir_added, colour_added, face, tmpl.entries.size());
+  return json{{"result", "ok"}, {"added", ir_added}, {"colour_added", colour_added}, {"face", face}};
 }
 
 json Engine::list(const Request& request) {
@@ -361,7 +450,7 @@ json Engine::list(const Request& request) {
   }
   json entries = json::array();
   for (const TemplateEntry& e : loaded.tmpl.entries) {
-    entries.push_back({{"id", e.id}, {"created", e.created}, {"face", e.face}});
+    entries.push_back({{"id", e.id}, {"created", e.created}, {"face", e.face}, {"kind", e.kind}});
   }
   return json{{"result", "ok"},
               {"entries", entries},

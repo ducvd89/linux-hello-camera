@@ -66,7 +66,7 @@ class Robustness(unittest.TestCase):
 
     def test_embeddings_are_never_passed_on(self):
         out = reply(result="ok", entries=[{"id": "1", "created": 1, "embedding": "AAAA"}])
-        self.assertEqual(set(parse(out)["entries"][0]), {"id", "created", "face"})
+        self.assertEqual(set(parse(out)["entries"][0]), {"id", "created", "face", "kind"})
 
 
 class Faces(unittest.TestCase):
@@ -91,6 +91,32 @@ class Faces(unittest.TestCase):
         faces = parse(out)
         self.assertEqual(faces["entries"][0]["face"], "")
         self.assertEqual(faces["names"], {})
+
+
+class Kinds(unittest.TestCase):
+    def test_kind_defaults_to_ir(self):
+        out = reply(result="ok", entries=[{"id": "1"}, {"id": "2", "kind": "colour"}, {"id": "3", "kind": "uv"}])
+        self.assertEqual([e["kind"] for e in parse(out)["entries"]], ["ir", "colour", "ir"])
+
+
+class ColourCamera(unittest.TestCase):
+    IR = "/dev/v4l/by-path/pci-0000:65:00.4-usb-0:1:1.2-video-index0"
+
+    def test_prefers_the_colour_camera_on_the_same_device(self):
+        cams = [("/dev/v4l/by-path/pci-0000:00:14.0-usb-0:3:1.0-video-index0", False),
+                ("/dev/v4l/by-path/pci-0000:65:00.4-usbv2-0:1:1.0-video-index0", False),
+                (self.IR, True)]
+        self.assertEqual(common.pick_colour_camera(self.IR, cams),
+                         "/dev/v4l/by-path/pci-0000:65:00.4-usbv2-0:1:1.0-video-index0")
+
+    def test_falls_back_to_any_colour_camera(self):
+        other = "/dev/v4l/by-path/pci-0000:00:14.0-usb-0:3:1.0-video-index0"
+        self.assertEqual(common.pick_colour_camera(self.IR, [(other, False), (self.IR, True)]), other)
+        self.assertEqual(common.pick_colour_camera("/dev/video2", [("/dev/video0", False)]), "/dev/video0")
+
+    def test_none_without_a_colour_camera(self):
+        self.assertIsNone(common.pick_colour_camera(self.IR, [(self.IR, True)]))
+        self.assertIsNone(common.pick_colour_camera(self.IR, []))
 
 
 if __name__ == "__main__":

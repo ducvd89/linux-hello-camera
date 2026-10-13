@@ -1,6 +1,8 @@
 #include "camera/frame.h"
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstdlib>
 
 namespace lhc {
@@ -39,6 +41,17 @@ std::vector<bool> classifyLit(const std::vector<double>& means) {
     }
   }
   return lit;
+}
+
+GreyImage brighten(const GreyImage& image, float gamma) {
+  std::array<uint8_t, 256> table{};
+  for (int v = 0; v < 256; ++v) {
+    table[v] = static_cast<uint8_t>(std::lround(255.0 * std::pow(v / 255.0, gamma)));
+  }
+  GreyImage out(image.width, image.height);
+  std::transform(image.data.begin(), image.data.end(), out.data.begin(),
+                 [&](uint8_t v) { return table[v]; });
+  return out;
 }
 
 int findUnlitPartner(const std::vector<FrameStamp>& frames, size_t lit_index, int64_t max_gap_us) {

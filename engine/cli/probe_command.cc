@@ -64,7 +64,11 @@ std::string describe(const Observation& obs, const ProbeContext& ctx) {
   } else {
     line += ", \"unlit_seq\": null";
   }
-  line += fmt::format(", \"specular\": {}", obs.specular);
+  line += fmt::format(
+      ", \"specular\": {}, \"glints\": [{}, {}, {}], \"eyes_lit\": {}, \"eyes_unlit\": {}, "
+      "\"boost\": {:.2f}",
+      obs.specular, obs.glints.regions, obs.glints.lit, obs.glints.unlit, obs.glints.weakest_lit,
+      obs.glints.brightest_unlit, obs.boost_gamma);
   if (!ctx.enrolled.empty() && !obs.embedding.empty()) {
     float best = -1.0f;
     for (const auto& e : ctx.enrolled) {

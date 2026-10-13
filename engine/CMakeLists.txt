@@ -22,6 +22,7 @@ set(LHC_FACES_DIR "/var/lib/linux-hello-camera/faces" CACHE PATH "Face crops lef
 set(LHC_TEMPLATES_DIR "/var/lib/linux-hello-camera/templates" CACHE PATH "Face templates, one file per user")
 set(LHC_SOCKET_PATH "/run/linux-hello-camera/engine.sock" CACHE FILEPATH "Daemon socket")
 set(LHC_CONFIRM_HOOK "/usr/lib/linux-hello-camera/confirm-hook" CACHE FILEPATH "Confirmation hook run by auth")
+set(LHC_SETTINGS_HELPER "/usr/lib/linux-hello-camera/settings-helper" CACHE FILEPATH "The app's root helper (pkexec)")
 
 include(GNUInstallDirs)
 set(LHC_HELPER_PATH "${CMAKE_INSTALL_FULL_LIBDIR}/linux-hello-camera/linux-hello-camera-helper")

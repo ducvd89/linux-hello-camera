@@ -15,6 +15,9 @@ struct Models {
   std::unique_ptr<FaceDetection> detector;
   std::unique_ptr<FaceRecognition> recognizer;
   std::unique_ptr<FaceAntiSpoofing> antispoof;  // only when ai_antispoof.enabled
+  // The same model for the colour camera's pictures, which it was trained on; only when
+  // backlight.enabled.
+  std::unique_ptr<FaceAntiSpoofing> colour_antispoof;
 };
 
 // Loads the models named in `config` from `models_dir`. On failure returns false with the

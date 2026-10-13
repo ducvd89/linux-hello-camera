@@ -10,9 +10,9 @@
 
 namespace lhc {
 
-CameraStream::CameraStream(const std::string& path)
-    : opener_([path](std::string& error) -> std::unique_ptr<FrameSource> {
-        return V4l2Camera::open(path, error);
+CameraStream::CameraStream(const std::string& path, bool colour)
+    : opener_([path, colour](std::string& error) -> std::unique_ptr<FrameSource> {
+        return V4l2Camera::open(path, error, colour);
       }) {}
 
 bool CameraStream::open(std::string& error) {

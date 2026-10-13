@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <string>
+#include <vector>
 
 #include "cli/confirm_hook.h"
 #include "cli/daemon_client.h"
@@ -55,12 +56,50 @@ bool remoteSession(bool pam_remote) {
   return false;
 }
 
+// argv of a process from /proc/<pid>/cmdline; empty if it is gone or unreadable.
+std::vector<std::string> commandLine(const std::string& path) {
+  std::ifstream file(path, std::ios::binary);
+  std::vector<std::string> args;
+  std::string arg;
+  while (std::getline(file, arg, '\0')) {
+    args.push_back(arg);
+  }
+  return args;
+}
+
 int ignore(const std::string& username, const std::string& reason) {
   spdlog::info("user={} ignored: {}", username, reason);
   return kExitIgnore;
 }
 
 }  // namespace
+
+bool appAdminRequestPending(const std::string& proc_root, const std::string& settings_helper) {
+  DIR* dir = opendir(proc_root.c_str());
+  if (dir == nullptr) {
+    return false;
+  }
+  bool pending = false;
+  while (const dirent* entry = readdir(dir)) {
+    const std::string pid = entry->d_name;
+    if (pid.empty() || !std::all_of(pid.begin(), pid.end(), ::isdigit)) {
+      continue;
+    }
+    const std::vector<std::string> args = commandLine(proc_root + "/" + pid + "/cmdline");
+    if (args.empty() || args[0].substr(args[0].rfind('/') + 1) != "pkexec") {
+      continue;
+    }
+    // pkexec [--options...] PROGRAM [ARGS...]
+    const auto program = std::find_if(args.begin() + 1, args.end(),
+                                       [](const std::string& a) { return a.rfind("--", 0) != 0; });
+    if (program != args.end() && *program == settings_helper) {
+      pending = true;
+      break;
+    }
+  }
+  closedir(dir);
+  return pending;
+}
 
 int runAuthCommand(const ClientContext& context, const std::string& username,
                    const std::string& service, bool remote) {
@@ -78,6 +117,10 @@ int runAuthCommand(const ClientContext& context, const std::string& username,
   }
   if (config.abort_if_ssh && remoteSession(remote)) {
     return ignore(username, "remote session");
+  }
+  // The app's own admin requests take the password: see appAdminRequestPending.
+  if (service == "polkit-1" && appAdminRequestPending(context.proc_root, context.settings_helper)) {
+    return ignore(username, "the app asks for admin rights: password only");
   }
   // The lid is checked here, not in the daemon: its sandbox hides /proc/acpi.
   if (config.abort_if_lid_closed && lidClosed()) {

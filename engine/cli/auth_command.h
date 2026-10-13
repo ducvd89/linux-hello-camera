@@ -19,4 +19,10 @@ inline constexpr int kExitIgnore = 2;
 int runAuthCommand(const ClientContext& context, const std::string& username,
                    const std::string& service, bool remote);
 
+// True while a `pkexec <settings_helper> ...` process waits under `proc_root`: the app is asking
+// for admin rights. Face unlock then steps aside so changing face unlock itself always takes the
+// password; a face that could be faked must not be able to add another face. (Once authorised,
+// pkexec runs the helper in its place, so only a pending request matches.)
+bool appAdminRequestPending(const std::string& proc_root, const std::string& settings_helper);
+
 }  // namespace lhc

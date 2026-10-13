@@ -27,6 +27,7 @@ void testDefaults() {
   CHECK_NEAR(c.ir_liveness.min_face_gain, 25.0, 1e-6);
   CHECK_NEAR(c.ir_liveness.min_gain_ratio, 1.8, 1e-6);
   CHECK(!c.ai_antispoof.enabled);
+  CHECK(!c.backlight.enabled && c.backlight.camera.empty());
   CHECK(c.ai_antispoof.model == "minifas_v2.onnx");
   CHECK_NEAR(c.ai_antispoof.threshold, 0.8, 1e-6);
   CHECK(c.confirm.enabled);
@@ -112,10 +113,22 @@ void testModelPaths() {
 
 }  // namespace
 
+void testBacklight() {
+  const Config c = parseConfig(R"(
+backlight:
+  enabled: true
+  camera: /dev/v4l/by-path/pci-0000:65:00.4-usb-0:1:1.0-video-index0
+)");
+  CHECK(c.backlight.enabled);
+  CHECK(c.backlight.camera == "/dev/v4l/by-path/pci-0000:65:00.4-usb-0:1:1.0-video-index0");
+  CHECK(!parseConfig("backlight: yes\n").backlight.enabled);  // not a map: defaults
+}
+
 void testConfig() {
   testDefaults();
   testOverridesAndUnknownKeys();
   testBadValues();
   testModelsDirEnvironment();
   testModelPaths();
+  testBacklight();
 }

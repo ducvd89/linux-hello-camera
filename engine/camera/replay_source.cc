@@ -48,6 +48,14 @@ ReadStatus ReplaySource::read(Frame& out, int timeout_ms) {
     out.image = GreyImage(w, h);
     std::copy(pixels, pixels + out.image.data.size(), out.image.data.begin());
     stbi_image_free(pixels);
+    out.colour = ImageRGB();
+    if (channels >= 3) {  // a recording of a colour camera
+      uint8_t* rgb = stbi_load(item.path.c_str(), &w, &h, &channels, 3);
+      if (rgb != nullptr) {
+        out.colour = ImageRGB(w, h, rgb);
+        stbi_image_free(rgb);
+      }
+    }
     out.timestamp_us = item.timestamp_us;
     out.seq = item.seq;
     return ReadStatus::kOk;

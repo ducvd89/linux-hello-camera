@@ -16,10 +16,10 @@
 
 namespace lhc {
 
-// Opens the camera named in the config (a device path), or returns null with `error` set. Tests
-// plug in a replay of recorded frames.
-using CameraOpener =
-    std::function<std::unique_ptr<FrameSource>(const std::string& device, std::string& error)>;
+// Opens the camera named in the config (a device path), for colour when `colour` (the backlight
+// camera), or returns null with `error` set. Tests plug in a replay of recorded frames.
+using CameraOpener = std::function<std::unique_ptr<FrameSource>(const std::string& device,
+                                                                bool colour, std::string& error)>;
 
 // Sends one reply line to the client; false once the client has gone away.
 using Emit = std::function<bool(const nlohmann::json&)>;

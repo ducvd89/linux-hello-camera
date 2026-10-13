@@ -47,6 +47,7 @@ std::string templateToJson(const Template& tmpl) {
     entries.push_back({{"id", e.id},
                        {"created", e.created},
                        {"face", e.face},
+                       {"kind", e.kind},
                        {"embedding", encodeEmbedding(e.embedding)}});
   }
   nlohmann::json doc = {{"version", tmpl.version},
@@ -74,6 +75,11 @@ bool templateFromJson(const std::string& text, Template& out, std::string& error
       e.id = item.at("id").get<std::string>();
       e.created = item.at("created").get<int64_t>();
       e.face = item.value("face", std::string());
+      e.kind = item.value("kind", std::string(kIrKind));
+      if (e.kind != kIrKind && e.kind != kColourKind) {
+        error = "unknown picture kind in template";
+        return false;
+      }
       if (e.face.empty()) {
         if (legacy_face.empty()) {
           legacy_face = e.id;

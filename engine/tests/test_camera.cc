@@ -50,14 +50,29 @@ void testClassifyLitInDaylight() {
   const std::vector<bool> dropped = classifyLit({30.0, 31.0, 60.0, 30.0, 61.0});
   CHECK(!dropped[0] && !dropped[1] && dropped[2] && !dropped[3] && dropped[4]);
 
+  // Backlit: a bright window fills the picture, the swing is a few levels.
+  const std::vector<bool> backlit = classifyLit({14.2, 12.5, 15.0, 13.3, 16.1});
+  CHECK(backlit[0] && !backlit[1] && backlit[2] && !backlit[3] && backlit[4]);
+
   // No strobe: fall back to the absolute level.
-  const std::vector<bool> steady = classifyLit({50.0, 51.0, 49.0});
+  const std::vector<bool> steady = classifyLit({50.0, 50.4, 49.8});
   CHECK(steady[0] && steady[1] && steady[2]);
   const std::vector<bool> black = classifyLit({0.03, 0.04});
   CHECK(!black[0] && !black[1]);
 
   CHECK(classifyLit({}).empty());
   CHECK(classifyLit({42.0})[0]);
+}
+
+void testBrighten() {
+  GreyImage img(4, 1, 0);
+  img.at(1, 0) = 4;
+  img.at(2, 0) = 64;
+  img.at(3, 0) = 255;
+  const GreyImage b = brighten(img, 0.5f);
+  CHECK(b.at(0, 0) == 0 && b.at(3, 0) == 255);   // the ends stay put
+  CHECK(b.at(1, 0) == 32 && b.at(2, 0) == 128);  // sqrt: dark levels gain the most
+  CHECK(brighten(img, 1.0f).data == img.data);
 }
 
 void testPairing() {
@@ -151,6 +166,7 @@ void testCamera() {
   testUniform();
   testLitClassification();
   testClassifyLitInDaylight();
+  testBrighten();
   testPairing();
   testReopenOnUniformFrames();
   testOpenFailure();

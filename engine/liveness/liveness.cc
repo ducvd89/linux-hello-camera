@@ -109,4 +109,44 @@ int countSpecular(const GreyImage& lit, const std::vector<Box>& regions) {
   return count;
 }
 
+namespace {
+
+int maxIn(const GreyImage& image, const Box& region) {
+  const Box r = clipTo(region, image.width, image.height);
+  int best = -1;
+  for (int y = r.y1; y < r.y2; ++y) {
+    for (int x = r.x1; x < r.x2; ++x) {
+      best = std::max(best, static_cast<int>(image.at(x, y)));
+    }
+  }
+  return best;
+}
+
+}  // namespace
+
+GlintResult measureGlints(const GreyImage& lit, const GreyImage& unlit,
+                          const std::vector<Box>& regions) {
+  GlintResult result;
+  if (lit.width != unlit.width || lit.height != unlit.height) {
+    return result;
+  }
+  for (const Box& region : regions) {
+    const int lit_max = maxIn(lit, region);
+    if (lit_max < 0) {
+      continue;  // outside the image
+    }
+    const int unlit_max = maxIn(unlit, region);
+    ++result.regions;
+    result.lit += lit_max >= kGlintLevel ? 1 : 0;
+    result.unlit += unlit_max >= kGlintUnlitLevel ? 1 : 0;
+    result.weakest_lit = std::min(result.weakest_lit, lit_max);
+    result.brightest_unlit = std::max(result.brightest_unlit, unlit_max);
+  }
+  return result;
+}
+
+bool glintsPass(const GlintResult& glints) {
+  return glints.regions == 2 && glints.lit == 2 && glints.unlit == 0;
+}
+
 }  // namespace lhc

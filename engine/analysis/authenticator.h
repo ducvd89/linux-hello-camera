@@ -32,7 +32,14 @@ struct AuthReport {
   float face_gain_median = 0.0f;  // over all pairs with a face, for calibration
   float ratio_median = 0.0f;
   std::string detail;  // reason, for kError and kCameraUnavailable
+  bool backlit = false;      // stopped early: the face is too dark for the IR checks (runAuth)
+  bool used_colour = false;  // the verdict is the backlight fallback's (runBacklightAuth)
 };
+
+// With `stop_when_backlit`, runAuth gives up after this many lit frames when none was good and
+// no face brightened enough for the strobe check: that is a face in front of a bright window (or
+// nobody), and the caller can try the backlight fallback instead of waiting out the timeout.
+inline constexpr int kBacklitCheckFrames = 8;
 
 // The core of auth/test: reads frames from `camera` until a match is confirmed or `deadline`
 // passes; `start` is when the caller began, for elapsed_ms. `enrolled` are the embeddings of the
@@ -40,7 +47,7 @@ struct AuthReport {
 AuthReport runAuth(const Config& config, CameraStream& camera, Models& models,
                    const std::vector<std::vector<float>>& enrolled,
                    std::chrono::steady_clock::time_point start,
-                   std::chrono::steady_clock::time_point deadline);
+                   std::chrono::steady_clock::time_point deadline, bool stop_when_backlit = false);
 
 // Median of `values` (mean of the middle two for an even count); 0 for none.
 float medianOf(std::vector<float> values);

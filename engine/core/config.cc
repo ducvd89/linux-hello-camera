@@ -16,6 +16,7 @@ const char* const kFacesRoot = LHC_FACES_DIR;
 const char* const kTemplatesDir = LHC_TEMPLATES_DIR;
 const char* const kSocketPath = LHC_SOCKET_PATH;
 const char* const kConfirmHook = LHC_CONFIRM_HOOK;
+const char* const kSettingsHelper = LHC_SETTINGS_HELPER;
 
 namespace {
 
@@ -80,6 +81,9 @@ Config parseConfig(const std::string& yaml_text) {
   read(root["ai_antispoof"], "enabled", c.ai_antispoof.enabled);
   read(root["ai_antispoof"], "model", c.ai_antispoof.model);
   read(root["ai_antispoof"], "threshold", c.ai_antispoof.threshold);
+
+  read(root["backlight"], "enabled", c.backlight.enabled);
+  read(root["backlight"], "camera", c.backlight.camera);
 
   read(root["confirm"], "enabled", c.confirm.enabled);
   readStrings(root["confirm"], "services", c.confirm.services);

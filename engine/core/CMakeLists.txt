@@ -11,6 +11,7 @@ target_compile_definitions(lhc_core PRIVATE
     LHC_TEMPLATES_DIR="${LHC_TEMPLATES_DIR}"
     LHC_SOCKET_PATH="${LHC_SOCKET_PATH}"
     LHC_CONFIRM_HOOK="${LHC_CONFIRM_HOOK}"
+    LHC_SETTINGS_HELPER="${LHC_SETTINGS_HELPER}"
     LHC_MODELS_DIR="${LHC_MODELS_DIR}"
 )
 target_link_libraries(lhc_core PUBLIC yaml-cpp::yaml-cpp)

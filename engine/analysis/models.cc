@@ -30,7 +30,8 @@ bool loadModels(const Config& config, const std::string& models_dir, Models& mod
       return false;
     }
   }
-  if (config.ai_antispoof.enabled && (as_path.empty() || !std::ifstream(as_path).good())) {
+  if ((config.ai_antispoof.enabled || config.backlight.enabled) &&
+      (as_path.empty() || !std::ifstream(as_path).good())) {
     error = "model not found: " + as_path;
     return false;
   }
@@ -41,6 +42,10 @@ bool loadModels(const Config& config, const std::string& models_dir, Models& mod
     if (config.ai_antispoof.enabled) {
       // "auto": the anti-spoofing class picks MiniFAS or MobileNetV3 from the file name.
       models.antispoof =
+          std::make_unique<FaceAntiSpoofing>(as_path, 128, config.ai_antispoof.threshold, "auto");
+    }
+    if (config.backlight.enabled) {
+      models.colour_antispoof =
           std::make_unique<FaceAntiSpoofing>(as_path, 128, config.ai_antispoof.threshold, "auto");
     }
   } catch (const std::exception& e) {

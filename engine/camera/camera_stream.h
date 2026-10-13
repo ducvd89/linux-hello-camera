@@ -15,8 +15,8 @@ class CameraStream {
   // Opens a source, or returns null with the reason in `error`.
   using Opener = std::function<std::unique_ptr<FrameSource>(std::string& error)>;
 
-  // A V4L2 camera at `path`.
-  explicit CameraStream(const std::string& path);
+  // A V4L2 camera at `path`, opened for colour if `colour` (see V4l2Camera::open).
+  explicit CameraStream(const std::string& path, bool colour = false);
   explicit CameraStream(Opener opener) : opener_(std::move(opener)) {}
 
   bool open(std::string& error);

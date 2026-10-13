@@ -25,6 +25,9 @@ ai_antispoof:
   enabled: false
   model: minifas_v2.onnx
   threshold: 0.8
+backlight:                      # a bright window behind you: confirm the face with the colour camera too
+  enabled: false
+  camera: ''                    # the colour camera next to the IR one (set by the app)
 confirm:
   enabled: true                 # ask before approving these services after a match
   services: [sudo, polkit-1]

@@ -9,7 +9,8 @@
 namespace lhc {
 
 // Plays back a recorded session folder (PNG frames + session.json with per-frame "file" and "t"
-// seconds, optional "seq"), as the frames a camera would deliver, without waiting. After the last
+// seconds, optional "seq"), as the frames a camera would deliver, without waiting. Colour PNGs
+// (a colour camera's recording) also fill Frame::colour. After the last
 // frame read() waits out its timeout (at most a moment) and reports a timeout. Serves probe-dir and
 // the tests.
 class ReplaySource : public FrameSource {

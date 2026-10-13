@@ -45,7 +45,27 @@ inline constexpr int kSpecularLevel = 250;
 std::vector<Box> eyeRegions(const Box& face, const Landmarks& landmarks);
 
 // Near-saturated pixels of `lit` inside `regions` (clipped to the image).
-// Reported for later phases; nothing gates on it yet.
+// Reported for calibration; nothing gates on it.
 int countSpecular(const GreyImage& lit, const std::vector<Box>& regions);
+
+// Eye glints: the emitter's reflection on the cornea (or glasses) is a bright spot in each eye
+// that is there in the lit frame and gone in the unlit one, even when the rest of the face is
+// too dark for measureGain (a bright window behind the user). A matte print has none.
+inline constexpr int kGlintLevel = 100;        // a glint in the lit frame reaches this (seen: 117-255)
+inline constexpr int kGlintUnlitLevel = 64;    // and the unlit frame stays below this there (seen: 0-11)
+
+struct GlintResult {
+  int regions = 0;      // eye regions looked at
+  int lit = 0;          // regions with a pixel >= kGlintLevel in the lit frame
+  int unlit = 0;        // regions with a pixel >= kGlintUnlitLevel in the unlit frame
+  int weakest_lit = 255;  // the dimmer eye's brightest pixel, lit frame (for calibration)
+  int brightest_unlit = 0;  // the brighter eye's brightest pixel, unlit frame
+};
+
+GlintResult measureGlints(const GreyImage& lit, const GreyImage& unlit,
+                          const std::vector<Box>& regions);
+
+// Both eyes (two regions, so the detector gave landmarks) glint when lit and not when unlit.
+bool glintsPass(const GlintResult& glints);
 
 }  // namespace lhc

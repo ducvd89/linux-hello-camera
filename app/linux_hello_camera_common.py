@@ -64,6 +64,10 @@ DEFAULTS = {
         "model": "minifas_v2.onnx",
         "threshold": 0.8,
     },
+    "backlight": {
+        "enabled": False,
+        "camera": "",
+    },
     "confirm": {
         "enabled": True,
         "services": ["sudo", "polkit-1"],
@@ -148,9 +152,9 @@ def has_faces(username):
 
 def parse_face_list(text):
     """Turn the output of `linux-hello-camera-helper list` into a dict for the app:
-    {"state": "ok", "entries": [{"id", "created", "face"}], "names": {face: name}, "encryption": ..., "detail": ...}
-    where face is the id of the face (person or look) the picture belongs to, and state is ok,
-    not_enrolled, needs_reenrol or error."""
+    {"state": "ok", "entries": [{"id", "created", "face", "kind"}], "names": {face: name}, "encryption": ..., "detail": ...}
+    where face is the id of the face (person or look) the picture belongs to, kind is the camera
+    that took it ("ir" or "colour"), and state is ok, not_enrolled, needs_reenrol or error."""
     reply = None
     for line in reversed((text or "").splitlines()):
         if line.strip().startswith("{"):
@@ -173,7 +177,8 @@ def parse_face_list(text):
                 face = face if isinstance(face, str) and re.fullmatch(r"[0-9]{1,20}", face) else ""
                 entries.append({"id": entry["id"],
                                 "created": created if isinstance(created, (int, float)) and not isinstance(created, bool) else None,
-                                "face": face})
+                                "face": face,
+                                "kind": "colour" if entry.get("kind") == "colour" else "ir"})
         encryption = reply.get("encryption") if reply.get("encryption") in ENCRYPTION_MODES else None
         names = reply.get("names") if isinstance(reply.get("names"), dict) else {}
         names = {face: name for face, name in names.items() if isinstance(name, str) and name.strip()}
@@ -182,6 +187,18 @@ def parse_face_list(text):
         return {"state": result, "entries": [], "names": {}, "encryption": None, "detail": detail}
     return {"state": "error", "entries": [], "names": {}, "encryption": None,
             "detail": detail or "Unexpected answer from the engine"}
+
+
+def pick_colour_camera(ir_camera, cameras):
+    """The colour camera to pair with IR_CAMERA for the backlight fallback, or None.
+    CAMERAS is [(path, is_ir)]. Prefers one on the same USB device (the same by-path name up to
+    the interface number), as a laptop's IR and colour cameras are one device."""
+    colour = [path for path, is_ir in cameras if not is_ir and path != ir_camera]
+    def device(path):
+        m = re.match(r"(.*-usb(?:v2)?-[0-9.:]+?):\d+\.\d+-video-index\d+$", path)
+        return m.group(1).replace("-usbv2-", "-usb-") if m else None
+    same = [path for path in colour if device(path) and device(path) == device(ir_camera)]
+    return (same or colour or [None])[0]
 
 
 def group_faces(entries, names=None):

@@ -134,6 +134,43 @@ void testSpecular() {
 
 }  // namespace
 
+void testGlints() {
+  const std::vector<Box> eyes = {Box(270, 150, 300, 180), Box(340, 150, 370, 180)};
+  // Backlit: the face is nearly black, but each eye has a bright glint when lit.
+  GreyImage lit = scene(30, 8, kFace), unlit = scene(30, 0, kFace);
+  lit.at(285, 165) = 200;
+  lit.at(355, 166) = 255;
+  GlintResult g = measureGlints(lit, unlit, eyes);
+  CHECK(g.regions == 2 && g.lit == 2 && g.unlit == 0 && glintsPass(g));
+  CHECK(g.weakest_lit == 200 && g.brightest_unlit == 0);
+
+  // A dim glint still counts above kGlintLevel, not below it.
+  GreyImage dim = scene(30, 8, kFace);
+  dim.at(285, 165) = kGlintLevel;
+  dim.at(355, 166) = kGlintLevel;
+  CHECK(glintsPass(measureGlints(dim, unlit, eyes)));
+  dim.at(355, 166) = kGlintLevel - 1;
+  CHECK(!glintsPass(measureGlints(dim, unlit, eyes)));
+
+  // One eye only (a reflection off a print), or none at all.
+  GreyImage one = scene(30, 8, kFace);
+  one.at(285, 165) = 200;
+  CHECK(!glintsPass(measureGlints(one, unlit, eyes)));
+  CHECK(!glintsPass(measureGlints(scene(30, 8, kFace), unlit, eyes)));
+
+  // Bright in the unlit frame too: not the emitter's reflection (a lamp, a screen).
+  GreyImage steady = unlit;
+  steady.at(285, 165) = 200;
+  steady.at(355, 166) = 200;
+  CHECK(!glintsPass(measureGlints(lit, steady, eyes)));
+
+  // Without landmarks there is a single region: never enough.
+  CHECK(!glintsPass(measureGlints(lit, unlit, {Box(220, 100, 420, 173)})));
+  // Regions outside the image are not counted; mismatched sizes give nothing.
+  CHECK(measureGlints(lit, unlit, {Box(700, 10, 720, 20)}).regions == 0);
+  CHECK(measureGlints(lit, GreyImage(10, 10), eyes).regions == 0);
+}
+
 void testLiveness() {
   testRealFace();
   testScreenOrPhoto();
@@ -141,4 +178,5 @@ void testLiveness() {
   testBackgroundIsRobust();
   testNegativeBackgroundAndEdgeCases();
   testSpecular();
+  testGlints();
 }

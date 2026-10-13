@@ -92,6 +92,17 @@ void testTemplateJson() {
                          "{\"id\":\"8\",\"created\":1,\"embedding\":\"AACAPw==\"}]}",
                          back, error));
   CHECK(back.entries[0].face == "7" && back.entries[1].face == "7" && back.names.empty());
+  CHECK(back.entries[0].kind == kIrKind);  // saved before colour pictures existed
+
+  // The camera that took a picture survives; an unknown one makes the template unusable.
+  Template kinds = sampleTemplate();
+  kinds.entries[1].kind = kColourKind;
+  CHECK(templateFromJson(templateToJson(kinds), back, error));
+  CHECK(back.entries[0].kind == kIrKind && back.entries[1].kind == kColourKind);
+  CHECK(!templateFromJson("{\"version\":1,\"model\":\"m\",\"dim\":1,\"entries\":["
+                          "{\"id\":\"7\",\"created\":1,\"kind\":\"uv\","
+                          "\"embedding\":\"AACAPw==\"}]}",
+                          back, error));
 
   CHECK(!templateFromJson("not json", back, error));
   CHECK(!templateFromJson("{\"version\":2,\"model\":\"m\",\"dim\":1,\"entries\":[]}", back, error));
