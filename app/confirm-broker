@@ -40,6 +40,9 @@ def start():
         return 0
     if not common.confirm_enabled(service):
         return 0
+    # This app asking for admin rights: face unlock steps aside and the password box handles it
+    if service == "polkit-1" and common.app_admin_request_pending():
+        return 0
     try:
         user = pwd.getpwnam(os.environ.get("PAM_USER", ""))
     except KeyError:

@@ -508,6 +508,7 @@ class LinuxHelloCameraWindow(Adw.ApplicationWindow):
         self.crypt_row.connect("notify::active", self._on_crypt_toggled)
         self.models_group.add(self.crypt_row)
         self.model_rows = []
+        self.faces = {"entries": []}
         self._engine_generation = {}
         self.encryption_status = common.local_status(self.config)
         page.add(self.models_group)
@@ -614,8 +615,9 @@ class LinuxHelloCameraWindow(Adw.ApplicationWindow):
         self._spin(advanced, "ir_liveness.min_gain_ratio", "Minimum face-to-background ratio",
                    "How much more the face brightens than what is behind it", 1.0, 10.0, 0.1, 1)
         live.add(advanced)
-        self._switch(live, "ai_antispoof.enabled", "AI anti-spoofing (for colour cameras)",
-                     "Experimental. Made for colour pictures, so leave it off with an IR camera")
+        self._switch(live, "ai_antispoof.enabled", "AI anti-spoofing on IR pictures",
+                     "Experimental. The model was trained on colour pictures and can turn real faces "
+                     "away here; leave it off. Unlock when backlit uses it on the colour camera anyway")
         self._switch(live, "backlight.enabled", "Unlock when backlit",
                      "When a bright window behind you hides your face from the IR camera, check it with "
                      "the colour camera too (its light turns on). Faces need colour pictures: use "
@@ -780,6 +782,7 @@ class LinuxHelloCameraWindow(Adw.ApplicationWindow):
             self._syncing = False
 
     def _show_faces(self, faces):
+        self.faces = faces
         for row in self.model_rows:
             self.models_group.remove(row)
         self.model_rows = []
@@ -1025,6 +1028,12 @@ class LinuxHelloCameraWindow(Adw.ApplicationWindow):
                         result = json.loads(line).get("result")
                     except ValueError:
                         break
+                    if (result in ("liveness_failed", "no_face")
+                            and common.get(self.config, "backlight.enabled") is True
+                            and not any(e["kind"] == "colour" for e in self.faces["entries"])):
+                        return ("No colour pictures yet",
+                                "Unlocking when backlit needs colour pictures of your face. Press "
+                                "Improve on your face to add them, then test again.")
                     if result in TEST_RESULTS:
                         return TEST_RESULTS[result]
                     break

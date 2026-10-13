@@ -189,5 +189,42 @@ class SocketTrust(unittest.TestCase):
                 self.assertEqual(common.trusted_socket(1234), None if os.getuid() != 0 else path)
 
 
+class AppAdminRequest(unittest.TestCase):
+    """While this app's pkexec waits for the password, the broker shows no dialog."""
+    HELPER = "/usr/lib/linux-hello-camera/settings-helper"
+
+    def proc(self, processes):
+        root = tempfile.mkdtemp()
+        self.addCleanup(lambda: __import__("shutil").rmtree(root))
+        for pid, args in processes.items():
+            os.makedirs(os.path.join(root, pid))
+            with open(os.path.join(root, pid, "cmdline"), "wb") as f:
+                f.write(b"".join(a.encode() + b"\0" for a in args))
+        return root
+
+    def test_the_apps_pending_request(self):
+        root = self.proc({"1": ["/sbin/init"], "300": ["pkexec", self.HELPER, "test"]})
+        self.assertTrue(common.app_admin_request_pending(root, self.HELPER))
+        root = self.proc({"301": ["/usr/bin/pkexec", "--disable-internal-agent", self.HELPER]})
+        self.assertTrue(common.app_admin_request_pending(root, self.HELPER))
+
+    def test_other_requests_and_running_helpers(self):
+        root = self.proc({"200": ["pkexec", "/usr/bin/gparted"],
+                          "201": ["/usr/bin/python3", "-I", self.HELPER, "enroll"],
+                          "self": ["pkexec", self.HELPER], "202": []})
+        self.assertFalse(common.app_admin_request_pending(root, self.HELPER))
+        self.assertFalse(common.app_admin_request_pending(root + "/missing", self.HELPER))
+
+    def test_the_broker_stays_quiet_for_it(self):
+        broker = load_script("confirm-broker")
+        env = {"PAM_SERVICE": "polkit-1", "PAM_TYPE": "auth", "PAM_USER": "someone"}
+        with mock.patch.dict(os.environ, env), mock.patch("os.geteuid", return_value=0), \
+                mock.patch.object(common, "confirm_enabled", return_value=True), \
+                mock.patch.object(common, "app_admin_request_pending", return_value=True), \
+                mock.patch.object(common, "desktop_env") as desktop:
+            self.assertEqual(broker.start(), 0)
+            desktop.assert_not_called()  # never got as far as looking for a desktop to show it in
+
+
 if __name__ == "__main__":
     unittest.main()

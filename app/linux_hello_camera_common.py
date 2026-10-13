@@ -150,6 +150,29 @@ def has_faces(username):
     return any(os.path.exists(os.path.join(TEMPLATES_DIR, username + ext)) for ext in TEMPLATE_EXTENSIONS)
 
 
+def app_admin_request_pending(proc_root="/proc", helper=None):
+    """True while a `pkexec <settings-helper> ...` process waits: this app is asking for admin
+    rights. Face unlock steps aside for those (the engine's appAdminRequestPending), so the
+    confirmation dialog must not show either; the system's password box handles it."""
+    helper = helper or LIB_DIR + "/settings-helper"
+    try:
+        pids = [p for p in os.listdir(proc_root) if p.isdigit()]
+    except OSError:
+        return False
+    for pid in pids:
+        try:
+            with open(os.path.join(proc_root, pid, "cmdline"), "rb") as f:
+                args = [a.decode(errors="replace") for a in f.read().split(b"\0") if a]
+        except OSError:
+            continue
+        if not args or os.path.basename(args[0]) != "pkexec":
+            continue
+        program = next((a for a in args[1:] if not a.startswith("--")), None)
+        if program == helper:
+            return True
+    return False
+
+
 def parse_face_list(text):
     """Turn the output of `linux-hello-camera-helper list` into a dict for the app:
     {"state": "ok", "entries": [{"id", "created", "face", "kind"}], "names": {face: name}, "encryption": ..., "detail": ...}
